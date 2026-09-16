@@ -1,7 +1,7 @@
 import { Link } from 'react-router-dom';
 
 import type { EventItem, Signal } from '../lib/api';
-import { confidenceChip, labelColour, localTime, num, pct, relativeTime, signed, titleCase } from '../lib/format';
+import { confidenceChip, horizonLabel, labelColour, localTime, num, pct, relativeTime, signed, titleCase } from '../lib/format';
 import WhyPanel from './WhyPanel';
 import { SampleFlag } from './ui';
 
@@ -22,7 +22,7 @@ function SignalRow({ signal }: { signal: Signal }) {
         <span>confidence {num(signal.confidence)}</span>
         {stat && stat.n > 0 && (
           <span>
-            median {signal.horizon} response {pct(stat.median)} (abn. {pct(stat.median_abnormal)})
+            median {horizonLabel(signal.horizon)} response {pct(stat.median)} (abn. {pct(stat.median_abnormal)})
           </span>
         )}
       </div>

@@ -491,3 +491,77 @@ def dashboard(db: Session = Depends(get_db), user: User = Depends(current_user))
             "next_digest": "daily digest (Phase 3)",
         },
     }
+
+
+@router.get("/events/{event_id}/similar")
+def similar_events(
+    event_id: str,
+    db: Session = Depends(get_db),
+    _: User = Depends(current_user),
+    limit: int = Query(10, ge=1, le=50),
+) -> dict:
+    """Top matches for an event, with what the price did after each.
+
+    The search is bounded by the subject event's own timestamp: a "similar
+    events" list that included later events would be showing you the future.
+    """
+    from ..embeddings.service import EmbeddingService
+
+    event = db.get(Event, event_id)
+    if event is None:
+        raise HTTPException(status_code=404, detail="Event not found")
+
+    service = EmbeddingService(db)
+    market = MarketDataService(db)
+    primary = next(
+        (t.ticker for t in event.tickers if t.confidence in ("HIGH", "MEDIUM")), None
+    )
+
+    items = []
+    for match in service.similar_events(event, limit=limit):
+        payload = match.as_dict()
+        payload["returns"] = (
+            {h: r.as_dict() for h, r in market.compute_returns(primary, match.event.source_timestamp).items()}
+            if primary
+            else {}
+        )
+        items.append(payload)
+    db.commit()
+
+    return {
+        "event_id": event.id,
+        "ticker": primary,
+        "provider": service.provider.name,
+        "measure": service.provider.label,
+        "semantic": service.provider.semantic,
+        "threshold": service.threshold,
+        "count": len(items),
+        "items": items,
+    }
+
+
+@router.get("/tickers/{symbol}/event-study")
+def ticker_event_study(
+    symbol: str,
+    event_type: str | None = None,
+    db: Session = Depends(get_db),
+    _: User = Depends(current_user),
+    limit: int = Query(100, ge=5, le=300),
+) -> dict:
+    """Market-model event study for a ticker.
+
+    Abnormal returns here are relative to a per-ticker alpha/beta estimated on a
+    window that ends before each event -- not the Phase 1 shortcut of assuming
+    beta is 1.
+    """
+    from ..pipeline.event_study import run_event_study
+
+    result = run_event_study(
+        db,
+        MarketDataService(db),
+        ticker=symbol.upper(),
+        event_type=event_type,
+        limit=limit,
+    )
+    db.commit()
+    return result.as_dict()

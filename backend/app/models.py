@@ -28,8 +28,11 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
 )
+from pgvector.sqlalchemy import Vector
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
+
+from .config import settings
 
 
 class Base(DeclarativeBase):
@@ -255,16 +258,24 @@ class ClaudeAnalysis(Base):
 
 
 class EventEmbedding(Base):
-    """Phase 1 stores a plain float array; Phase 2 migrates this to pgvector."""
+    """One vector per event, stored in pgvector.
+
+    `provider` and `model` travel with the vector so a similarity score can
+    always be attributed, and so a provider change is detectable (rows whose
+    provider no longer matches the configured one are re-embedded rather than
+    silently compared against vectors from a different space).
+    """
 
     __tablename__ = "event_embeddings"
 
     event_id: Mapped[str] = mapped_column(
         String(36), ForeignKey("events.id", ondelete="CASCADE"), primary_key=True
     )
+    provider: Mapped[str] = mapped_column(String(48), default="hashing")
     model: Mapped[str] = mapped_column(String(96))
     dim: Mapped[int] = mapped_column(Integer)
-    embedding: Mapped[list[float]] = mapped_column(ARRAY(Float))
+    embedding: Mapped[list[float]] = mapped_column(Vector(settings.embedding_dim))
+    content_hash: Mapped[str] = mapped_column(String(64), index=True)
     created_at: Mapped[dt.datetime] = mapped_column(TS, default=utcnow)
 
 
@@ -496,6 +507,7 @@ class NotificationDelivery(Base):
     __table_args__ = (
         Index("ix_deliveries_notification", "notification_id"),
         Index("ix_deliveries_status", "status"),
+        Index("ix_deliveries_retry", "status", "next_retry_at"),
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
@@ -506,6 +518,7 @@ class NotificationDelivery(Base):
     # PENDING | SENT | FAILED | UNAVAILABLE | EXPIRED
     status: Mapped[str] = mapped_column(String(16), default="PENDING")
     retry_count: Mapped[int] = mapped_column(Integer, default=0)
+    next_retry_at: Mapped[dt.datetime | None] = mapped_column(TS, nullable=True)
     provider_response: Mapped[str | None] = mapped_column(Text, nullable=True)
     subscription_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     created_at: Mapped[dt.datetime] = mapped_column(TS, default=utcnow)

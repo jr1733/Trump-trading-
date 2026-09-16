@@ -1,7 +1,8 @@
 import { Link, useParams } from 'react-router-dom';
 
 import EventCard from '../components/EventCard';
-import { Disclaimer, ErrorBox, Spinner } from '../components/ui';
+import SimilarEvents from '../components/SimilarEvents';
+import { Disclaimer, ErrorBox, Section, Spinner } from '../components/ui';
 import type { EventItem } from '../lib/api';
 import { localTimeFull } from '../lib/format';
 import { useApi } from '../lib/useApi';
@@ -20,6 +21,12 @@ export default function EventDetail() {
         ← Back to live feed
       </Link>
       <EventCard event={data} expanded />
+
+      <Section title="Similar past events">
+        <div className="card">
+          <SimilarEvents eventId={data.id} />
+        </div>
+      </Section>
 
       <div className="card mt-3 text-xs text-muted">
         <h3 className="label">Provenance</h3>

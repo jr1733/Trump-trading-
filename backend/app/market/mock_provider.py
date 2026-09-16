@@ -45,12 +45,39 @@ class MockMarketDataProvider(MarketDataProvider):
     name = "mock"
 
     EPOCH = dt.date(2023, 1, 3)
+    #: The synthetic market factor every other symbol loads on.
+    MARKET_SYMBOL = "SPY"
 
     def __init__(self, daily_vol: float = 0.012) -> None:
         self.daily_vol = daily_vol
         # symbol -> {date: close}, grown lazily. The walk is cumulative, so we
         # memoise rather than re-summing from the epoch on every lookup.
         self._series: dict[str, dict[dt.date, float]] = {}
+
+    def beta(self, symbol: str) -> float:
+        """Deterministic market beta per symbol.
+
+        Without this every symbol would be an independent walk, the market model
+        would estimate beta ~ 0, and "abnormal return" would collapse into "raw
+        return" -- which would make the event study look like it works while
+        testing nothing.
+        """
+        key = symbol.upper()
+        if key == self.MARKET_SYMBOL:
+            return 1.0
+        if key in ("QQQ", "XLK", "XLE", "XLF", "XLI", "XLV"):
+            return 0.9 + 0.4 * _unit(key, "beta")  # sector ETFs cluster near 1
+        return 0.5 + 1.3 * _unit(key, "beta")      # equities: roughly 0.5 - 1.8
+
+    def _daily_move(self, symbol: str, day: dt.date) -> float:
+        """Log return: beta * market factor + idiosyncratic noise."""
+        iso = day.isoformat()
+        market = self.daily_vol * _gauss(self.MARKET_SYMBOL, iso)
+        if symbol.upper() == self.MARKET_SYMBOL:
+            return market - 0.5 * self.daily_vol**2
+        # Idiosyncratic variance sized so total vol stays near `daily_vol`.
+        idio = self.daily_vol * 0.8 * _gauss(symbol, iso)
+        return self.beta(symbol) * market + idio - 0.5 * self.daily_vol**2
 
     def supports_intraday(self) -> bool:
         return True
@@ -81,9 +108,7 @@ class MockMarketDataProvider(MarketDataProvider):
         while cursor < day:
             cursor += dt.timedelta(days=1)
             if is_trading_day(cursor):
-                log_price += (
-                    self.daily_vol * _gauss(key, cursor.isoformat()) - 0.5 * self.daily_vol**2
-                )
+                log_price += self._daily_move(key, cursor)
             series[cursor] = round(math.exp(log_price), 4)
         return series[day]
 

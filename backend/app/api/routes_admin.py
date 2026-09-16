@@ -11,11 +11,13 @@ from sqlalchemy.orm import Session
 from ..auth import current_user
 from ..config import settings
 from ..db import get_db
+from ..embeddings.service import EmbeddingService, build_provider as build_embedding_provider
 from ..llm.fake import build_client
 from ..market.service import MarketDataService, build_provider
 from ..models import (
     ClaudeAnalysis,
     Event,
+    EventEmbedding,
     EventTicker,
     JobRun,
     LLMUsage,
@@ -51,6 +53,9 @@ def public_config() -> dict:
         "llm_mode": "canned-mock" if settings.llm_fake_mode else ("live" if settings.llm_enabled else "disabled"),
         "market_provider": settings.market_data_provider,
         "supports_intraday": build_provider().supports_intraday(),
+        "embedding_provider": settings.embedding_provider,
+        "embedding_semantic": build_embedding_provider().semantic,
+        "embedding_label": build_embedding_provider().label,
         "signal_weights": settings.signal_weights(),
         "signal_thresholds": settings.signal_thresholds(),
         "signal_return_scale": settings.signal_return_scale,
@@ -59,7 +64,7 @@ def public_config() -> dict:
             "limited_below": settings.min_reliable_sample,
         },
         "primary_horizon": settings.signal_primary_horizon,
-        "phase": 1,
+        "phase": 2,
     }
 
 
@@ -173,6 +178,69 @@ def import_archive(
     source_key = str((body or {}).get("source") or "archive")[:64]
     inserted = loader.import_archive(db, rows, source_key=source_key)
     return {"received": len(rows), "inserted": inserted}
+
+
+@router.post("/admin/embed")
+def trigger_embedding_backfill(
+    db: Session = Depends(get_db),
+    _: User = Depends(current_user),
+    limit: int = Query(500, ge=1, le=5000),
+) -> dict:
+    """Embed events that have no vector, or whose vector is stale."""
+    service = EmbeddingService(db)
+    written = service.backfill(limit=limit)
+    db.commit()
+    remaining = len(service.pending_events(limit=5000))
+    return {
+        "embedded": written,
+        "remaining": remaining,
+        "provider": service.provider.name,
+        "model": service.model_name,
+        "dim": service.provider.dim,
+    }
+
+
+@router.post("/admin/push-retry")
+def trigger_push_retry(db: Session = Depends(get_db), _: User = Depends(current_user)) -> dict:
+    """Retry due push deliveries and clean up long-dead subscriptions."""
+    from ..pipeline.push import cleanup_expired_subscriptions, retry_failed_deliveries
+
+    result = retry_failed_deliveries(db)
+    result["subscriptions_pruned"] = cleanup_expired_subscriptions(db)
+    return result
+
+
+@router.get("/admin/embeddings")
+def embedding_status(db: Session = Depends(get_db), _: User = Depends(current_user)) -> dict:
+    service = EmbeddingService(db)
+    total_events = int(db.execute(select(func.count(Event.id))).scalar() or 0)
+    embedded = int(
+        db.execute(
+            select(func.count(EventEmbedding.event_id)).where(
+                EventEmbedding.provider == service.provider.name
+            )
+        ).scalar()
+        or 0
+    )
+    by_provider = dict(
+        db.execute(
+            select(EventEmbedding.provider, func.count(EventEmbedding.event_id)).group_by(
+                EventEmbedding.provider
+            )
+        ).all()
+    )
+    return {
+        "provider": service.provider.name,
+        "model": service.model_name,
+        "dim": service.provider.dim,
+        "semantic": service.provider.semantic,
+        "measure": service.provider.label,
+        "similarity_threshold": service.threshold,
+        "events_total": total_events,
+        "events_embedded": embedded,
+        "events_pending": max(total_events - embedded, 0),
+        "rows_by_provider": by_provider,
+    }
 
 
 @router.get("/admin/data-quality")
@@ -296,8 +364,19 @@ def data_quality(db: Session = Depends(get_db), _: User = Depends(current_user))
         ).where(LLMUsage.created_at >= since)
     ).one()
 
+    embedded = int(
+        db.execute(
+            select(func.count(EventEmbedding.event_id)).where(
+                EventEmbedding.provider == settings.embedding_provider
+            )
+        ).scalar()
+        or 0
+    )
+    total_events = int(db.execute(select(func.count(Event.id))).scalar() or 0)
+
     return {
         "unprocessed_raw_events": unprocessed,
+        "events_without_current_embedding": max(total_events - embedded, 0),
         "duplicate_content_hashes": duplicate_hashes,
         "future_timestamps": future_events,
         "pending_or_failed_analyses": pending_analyses,

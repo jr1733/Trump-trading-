@@ -8,7 +8,7 @@ Donald Trump, and shows **how comparable past events related to market movements
 > associations between past announcements and past price moves, from small and non-independent
 > samples. **Association is not causation, and nothing here is a forecast or a recommendation.**
 
-**Current status: Phase 1 complete.** See [Phase status](#phase-status) for exactly what works,
+**Current status: Phase 2 complete.** See [Phase status](#phase-status) for exactly what works,
 what is mocked, and what is not built yet.
 
 ---
@@ -29,9 +29,13 @@ none of it needs a key.
 
 ### Without Docker
 
+**Postgres must have the `pgvector` extension** — embeddings are stored as
+`vector` columns. On Debian/Ubuntu: `apt install postgresql-16-pgvector`. The bundled
+compose file already uses the `pgvector/pgvector` image.
+
 ```bash
 make install            # creates .venv and installs backend deps
-createdb trumpmarket    # or point DATABASE_URL at any Postgres 14+
+createdb trumpmarket    # or point DATABASE_URL at any Postgres 14+ with pgvector
 export DATABASE_URL="postgresql+psycopg://postgres:postgres@localhost:5432/trumpmarket"
 export APP_AUTH_TOKEN=devtoken LLM_FAKE_MODE=true ENABLED_SOURCES=mock
 
@@ -67,10 +71,11 @@ or notification — there is an end-to-end test that asserts exactly this.
 | Page | What it shows |
 |---|---|
 | **Live** | Market context (SPY/QQQ/VIX/10y), top signals, source status, notification summary, and the event feed. Sort by newest, signal strength, ticker, source or event type. |
-| **Ticker** (`/ticker/:symbol`) | Current signal with its "Why?" panel, event-time price chart, historical statistics per horizon, full event history with subsequent returns, and a one-tap watch toggle. |
+| **Ticker** (`/ticker/:symbol`) | Current signal with its "Why?" panel, event-time price chart, historical statistics per horizon, an on-demand **event study**, full event history with subsequent returns, and a one-tap watch toggle. |
 | **Search** | Postgres full-text search over every event, each hit annotated with what the price did afterwards, plus "create alert from this search". |
 | **Notifications** | Unread badge, read/unread, archive, delete, mark-all-read, and the per-channel delivery status of each notification. |
-| **Settings** | Notification permission and push status, quiet hours, thresholds, digest settings, a test-notification button, source health, the live signal weights, and manual poll/pipeline/seed triggers. |
+| **Event detail** | The full text, the model's fact/position/claim/speculation split, the signal, provenance timestamps, and the **similar past events** list with what each one was followed by. |
+| **Settings** | Notification permission and push status, quiet hours, thresholds, digest settings, a test-notification button, source health, the live signal weights and embedding measure, and manual poll/pipeline/seed/embed/push-retry triggers. |
 | **Backtest** | Phase 3. States the look-ahead and LLM-contamination rules the feature will be built under. |
 
 ---
@@ -118,6 +123,75 @@ reminder that association is not causation.
 | < 10 | **unreliable** | Shown in the UI in red, given **zero weight** in the score. |
 | 10–19 | **limited** | Shown in amber, score scaled by 0.6. |
 | ≥ 20 | ok | Full weight. |
+
+---
+
+## Similarity and embeddings
+
+Every event is embedded into a 384-dimensional vector stored in **pgvector**, and
+similarity search runs in the database with the cosine distance operator against an HNSW
+index. Similarity drives two things: the **similar past events** list on each event, and the
+**novelty** component of the signal.
+
+Two providers ship, and *which one produced a score is displayed next to the score*:
+
+| Provider | Semantic? | Cost | Notes |
+|---|---|---|---|
+| `hashing` (**default**) | ❌ lexical | none | Hashed word/bigram/character n-grams, L2-normalised, fully deterministic. Genuinely related statements score around 0.30–0.45. No model download, no torch. |
+| `sentence-transformers` | ✅ semantic | ~2 GB installed | A real local model (`all-MiniLM-L6-v2` by default). Anthropic has no embeddings API, so this runs on your own hardware. |
+
+```bash
+pip install -r backend/requirements-embeddings.txt
+EMBEDDING_PROVIDER=sentence-transformers
+python backend/manage.py embed      # re-embed under the new provider
+```
+
+Three things this design gets right on purpose:
+
+- **Similarity thresholds are per provider, not global.** A cutoff tuned for a transformer
+  would reject every genuine match from the lexical embedder. Each provider carries its own
+  default; `SIMILARITY_THRESHOLD` overrides it only if you set it deliberately.
+- **A provider change invalidates its vectors.** Rows record the provider that wrote them, and
+  a vector from a different embedding space is treated as stale and re-embedded rather than
+  silently compared against the new ones.
+- **Similarity never redefines the statistical sample.** Comparable events are still chosen by
+  event type and ticker/sector. Similarity is *annotation*. If a tunable threshold could add
+  or drop events, the sample size — the number the whole signal is gated on — would move
+  whenever someone nudged a config value.
+
+Similarity search is bounded by the subject event's timestamp in SQL, for the same reason the
+historical statistics are: a neighbour search that can see later events leaks the future.
+
+## Event studies
+
+The Ticker page runs a proper market-model event study on demand. Where the signal's historical
+statistics subtract the benchmark's raw return (implicitly assuming β = 1), the event study
+estimates α and β per ticker:
+
+```
+R_i,t = α + β·R_m,t + ε        estimated over 180 trading days,
+                                ending 5 sessions before the event
+AR_t  = R_i,t − (α + β·R_m,t)
+CAR   = Σ AR over the event window
+```
+
+Windows reported: `[0,0]`, `[0,+1]`, `[0,+4]`, `[−1,+1]`, `[0,+19]`, each with the cumulative
+average abnormal return across events, the median, the positive share, and a t-statistic.
+
+The honesty rules are in the code, not the caption:
+
+- The estimation window ends **before** the event, with a gap, so the run-up cannot contaminate
+  α and β.
+- An event whose estimation window has fewer than 60 usable observations is **skipped and
+  listed**, not quietly dropped — the sample stays auditable.
+- An incomplete event window returns nothing rather than a partial CAR presented as a full one.
+- A cross-sectional t-statistic is withheld below N=5 and shown as "—".
+- The UI says explicitly that on samples this size "not significant" means *no detectable
+  effect*, not *no effect*.
+
+The mock market data generates each equity as `β·market + idiosyncratic noise`, so β is
+recoverable and the event study is exercised meaningfully offline rather than against
+uncorrelated random walks.
 
 ---
 
@@ -202,6 +276,9 @@ embedding model wants ~1 GB of RAM that a 256 MB managed instance does not have.
 that you own OS patching and backups. The best managed alternative inside budget is Fly.io with
 auto-stop **disabled** (~$12–14/month), at the cost of tighter memory for Phase 2.
 
+**Postgres needs pgvector.** The compose file uses the `pgvector/pgvector:pg16` image, so this
+is already handled; on a hand-rolled install add `postgresql-16-pgvector` before migrating.
+
 ```bash
 # On the server
 git clone <your-repo> && cd Trump-trading-
@@ -244,23 +321,32 @@ tab the subscription cannot be created and no push will ever arrive. Settings sh
 
 ### Web Push (VAPID) setup
 
-Phase 2 delivers push; the subscription plumbing and the schema are already in place, so the
-setup is:
+Push delivery is live. Generate a keypair and restart:
 
 ```bash
-# Option A — Node
-npx web-push generate-vapid-keys
-
-# Option B — OpenSSL
-openssl ecparam -genkey -name prime256v1 -out vapid_private.pem
-openssl ec -in vapid_private.pem -pubout -outform DER \
-  | tail -c 65 | base64 | tr -d '=+/' | tr '_-' '-_'
+make vapid            # or: python scripts/generate_vapid_keys.py
 ```
 
-Put the public key in `WEB_PUSH_PUBLIC_KEY`, the private key in `WEB_PUSH_PRIVATE_KEY`, and a
-contact URI in `WEB_PUSH_SUBJECT` (e.g. `mailto:you@example.com`). **Only the public key is ever
-sent to the browser.** Restart, then re-enable notifications in Settings so a subscription is
-created against the new key — changing the key invalidates existing subscriptions.
+Put the printed values in `WEB_PUSH_PUBLIC_KEY`, `WEB_PUSH_PRIVATE_KEY` and `WEB_PUSH_SUBJECT`
+(e.g. `mailto:you@example.com`). **Only the public key is ever sent to the browser.** Then
+re-enable notifications in Settings so a subscription is created against the new key — rotating
+the key invalidates every existing subscription, so each device has to opt in once more.
+
+With no keys set, push disables itself cleanly: every attempt records an `UNAVAILABLE` delivery
+row explaining why, and the in-app notification centre carries on unaffected.
+
+How failures are handled, because this is where push implementations usually go wrong:
+
+| Push service says | What happens |
+|---|---|
+| `201` | Delivery marked SENT; the subscription's failure counter resets. |
+| `404` / `410` | The endpoint is permanently gone. The subscription is deactivated immediately and never retried; after 30 days it is deleted. |
+| `429`, `5xx`, timeouts | Retryable. The delivery is rescheduled with exponential backoff, up to `WEB_PUSH_MAX_RETRIES`, by the worker's `push_retry` job. |
+| Anything else | Permanent failure, logged with the provider's own response text. |
+| Provider raises | Caught. Notification delivery never propagates into the pipeline. |
+
+A subscription that fails `WEB_PUSH_MAX_FAILURES` times in a row is retired, so one dead endpoint
+cannot consume the retry budget forever.
 
 ### SMTP (optional)
 
@@ -280,6 +366,8 @@ Work down this list; each step rules out the one below it.
 | **In-app works, push does not** | Settings → "Push configured" must be yes (VAPID keys set) **and** "Installed to Home Screen" must be yes on iOS. Both are shown on the page. |
 | **iPhone shows no permission prompt** | The prompt only appears from a real tap, and only in an installed web app. Re-add to the Home Screen and tap "Enable notifications" again. |
 | **Push worked, then stopped** | The push service expires subscriptions. A 404/410 marks the subscription inactive — visible in Settings → Push subscriptions and in the data-quality view. Re-enable notifications to create a fresh one. |
+| **A push failed once and never arrived** | Retryable failures are rescheduled automatically by the worker's `push_retry` job (every 2 minutes). Settings → Operations → "Retry failed push" forces a pass now. |
+| **Similar events list is empty or odd** | Check Settings → the similarity measure. The default embedder is *lexical*: it matches shared wording, not meaning. Switch to `sentence-transformers` for semantic matching. |
 | **Alerts fire once, then never again** | That is the re-arm rule working: a threshold alert fires on *crossing*, then waits for the signal to return inside the band. Set `repeat_alerts` on the rule if you want repeats. |
 | **Too many alerts** | Raise `min_sample_size` and `min_confidence` on the rule; the seeded threshold rule already defaults to N≥10 and confidence≥0.3. Lower `max_per_hour`. |
 | **No events at all** | Settings → Sources. A source in ERROR shows its last error. Check `docker compose logs worker`, and `/api/admin/data-quality` for unprocessed rows. |
@@ -293,9 +381,11 @@ Work down this list; each step rules out the one below it.
 make test            # or: cd backend && python -m pytest -q
 ```
 
-**203 tests, all passing.** They run against a real Postgres (`trumpmarket_test` by default;
-override with `TEST_DATABASE_URL`) because the idempotency guarantees are enforced by database
-constraints, and testing them against a fake would test nothing.
+**289 tests, all passing.** They run against a real Postgres with pgvector (`trumpmarket_test`
+by default; override with `TEST_DATABASE_URL`) because the idempotency guarantees are enforced by
+database constraints and the similarity search is real SQL — testing either against a fake would
+test nothing. The suite drops every table it touches, so it refuses to start unless the database
+name contains `test`.
 
 Coverage maps to the spec's list: deduplication · ticker matching and confidence · timestamp and
 market-hours handling · JSON validation and the retry · return and abnormal-return calculation ·
@@ -303,6 +393,12 @@ sample-size flags · signal calculation · look-ahead prevention · retry and ba
 evaluation · threshold crossing and re-arming · notification dedup · quiet hours · digest
 generation · push subscription register and expiry cleanup · email failure handling ·
 push-unavailable fallback · API auth and validation.
+
+Phase 2 adds: vector storage and staleness detection · similarity ranking and its time bound ·
+novelty windows and the lexical fallback · VAPID status-code handling (201 / 404 / 410 / 429 /
+5xx / raised) · retry scheduling, budget exhaustion and subscription retirement · OLS market-model
+recovery of a known β · abnormal returns isolating a known shock · an event study that finds a
+planted effect *and* correctly finds nothing when there is nothing.
 
 The **end-to-end test** (`tests/test_e2e.py`) does exactly what the spec asks: inserts a mock
 event, runs the pipeline, generates a signal, matches a watchlist rule, creates an in-app
@@ -341,19 +437,28 @@ development. Both are one environment variable away from real.
 **Needs a key:** real analysis (`ANTHROPIC_API_KEY`). Nothing else — the app is fully functional
 with zero keys.
 
-### Phase 2 — not built
+### Phase 2 — complete
 
-Web Push delivery (VAPID), the historical backfill importer's embedding pass, local
-`sentence-transformers` embeddings with pgvector, event studies with abnormal returns over an
-estimation window, and a Truth Social adapter *if* a terms-compliant feed is identified.
+**Works:** Web Push delivery over VAPID with per-status handling, backoff retries, subscription
+retirement and expiry cleanup · pgvector embeddings with an HNSW cosine index · similarity search
+bounded against look-ahead · embedding-based novelty with a lexical fallback · a "similar past
+events" list with subsequent returns · market-model event studies with CAAR and t-statistics ·
+`embed` and `push_retry` worker jobs · admin endpoints for both.
 
-The Phase 1 schema already carries `event_embeddings` and `push_subscriptions`, and the compose
-file already uses the pgvector image, so Phase 2 adds code rather than migrating data.
+**Mocked / limited:** the default embedder is **lexical, not semantic** — real semantic
+embeddings are one env var and one `pip install` away, and the UI says which is active. The
+`sentence-transformers` path could not be executed in the build environment (no network access to
+the model host), so it is written and type-checked but **not run**; the hashing path is fully
+tested.
+
+**Truth Social:** still manual-import only. No terms-compliant public feed was identified, so
+nothing changed — see [`docs/PHASE0_FEASIBILITY.md`](docs/PHASE0_FEASIBILITY.md) §1.1.
 
 ### Phase 3 — not built
 
-Congress.gov, OGE, email, digests, search-to-alert scheduling, backtesting, the data-quality page
-as a UI (the endpoint exists at `/api/admin/data-quality`), and the admin cost page.
+Congress.gov, OGE, email digests on a schedule, search-to-alert scheduling, backtesting, the
+data-quality page as a UI (the endpoint exists at `/api/admin/data-quality`), and the admin cost
+page.
 
 ---
 
@@ -365,6 +470,7 @@ as a UI (the endpoint exists at `/api/admin/data-quality`), and the admin cost p
 | Backups + domain | ~$2/month |
 | Market data (Stooq) | $0 |
 | Web Push (self-hosted VAPID) | $0 |
+| Embeddings (local, either provider) | $0 |
 | Anthropic API | ~$1–19/month depending on volume and model |
 | **Total** | **~$8–25/month** |
 
@@ -403,6 +509,17 @@ These are real and they do not have workarounds:
 8. **LLM contamination in backtests.** A model's training data may contain knowledge of what
    followed a historical event. When backtesting ships it will default to rule-based sentiment,
    and any LLM-scored backtest will be labelled "potentially contaminated".
+9. **The default embedder is lexical.** It matches shared wording, not meaning, so two
+   differently-worded statements about the same policy will look unrelated to it. Semantic
+   embeddings are one env var away but cost ~2 GB of dependencies. The UI names the active
+   measure on every similarity score so the two are never confused.
+10. **The `sentence-transformers` path is unexecuted.** The build environment had no network
+   access to the model host, so that provider is written and type-checked but has never been
+   run. Expect to `pip install`, run `manage.py embed`, and check the first result before
+   trusting it.
+11. **Event studies on political events rarely reach significance.** With a few dozen comparable
+   events and daily bars, the honest answer is usually "no detectable effect". The UI says so
+   rather than dressing up a t-statistic of 0.4.
 
 ---
 
@@ -412,23 +529,24 @@ These are real and they do not have workarounds:
 backend/
   app/
     api/            FastAPI routes (feed, user, admin) + serialisers
+    embeddings/     provider interface, hashing + sentence-transformers, pgvector search
     llm/            Anthropic client, prompts, schema, offline canned client
     market/         provider interface, mock + Stooq, US market calendar, returns
     pipeline/       relevance, ticker matching, analysis, historical, signals,
-                    notifications, email, and the pipeline runner
+                    event studies, notifications, web push, email, pipeline runner
     seed/           mock dataset, sample archive, loader and archive importer
     sources/        adapter interface, adapters, HTTP retry/backoff, registry
     worker/         APScheduler worker
     config.py  db.py  models.py  schemas.py  auth.py  main.py
   alembic/          migrations
-  tests/            203 tests, including the end-to-end test
-  manage.py         operational CLI (seed, import, poll, pipeline, status)
+  tests/            289 tests, including the end-to-end test
+  manage.py         operational CLI (seed, import, poll, pipeline, embed, status)
 frontend/
   src/              React + TypeScript pages, components, API client
   public/           manifest, service worker, icons
 docs/
   PHASE0_FEASIBILITY.md
-scripts/            archive and icon generators
+scripts/            archive, icon and VAPID key generators
 ```
 
 ---

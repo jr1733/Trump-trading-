@@ -156,17 +156,19 @@ def test_novelty_only_looks_backwards(db):
         db, when=dt.datetime(2026, 9, 1, 15, 0, tzinfo=UTC),
         text="Tariffs on consumer electronics are under review.",
     )
-    value, max_similarity = novelty(db, subject, window_days=30)
-    assert 0.0 <= value <= 1.0
-    assert 0.0 <= max_similarity <= 1.0
+    result = novelty(db, subject, window_days=30)
+    assert 0.0 <= result.value <= 1.0
+    assert 0.0 <= result.max_similarity <= 1.0
+    assert result.measure, "the panel must be able to name the measure used"
 
     # The August 4th event *is* in the window and is similar, so novelty < 1.
-    assert value < 1.0
+    assert result.value < 1.0
 
 
 def test_novelty_is_one_when_nothing_precedes_it(db):
     setup_timeline(db)
     lonely = add_event(db, when=dt.datetime(2020, 1, 1, 15, 0, tzinfo=UTC))
-    value, max_similarity = novelty(db, lonely, window_days=30)
-    assert value == 1.0
-    assert max_similarity == 0.0
+    result = novelty(db, lonely, window_days=30)
+    assert result.value == 1.0
+    assert result.max_similarity == 0.0
+    assert result.matched_event_id is None

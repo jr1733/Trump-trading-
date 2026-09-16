@@ -14,9 +14,14 @@ export function localTime(iso: string): string {
 }
 
 export function localTimeFull(iso: string): string {
+  // Explicit components, not dateStyle/timeStyle: ECMA-402 forbids combining
+  // those shortcuts with timeZoneName and throws "Invalid option" if you try.
   return new Date(iso).toLocaleString(undefined, {
-    dateStyle: 'medium',
-    timeStyle: 'short',
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
     timeZoneName: 'short',
   });
 }
@@ -81,4 +86,14 @@ export function confidenceChip(confidence: string): string {
 
 export function titleCase(value: string): string {
   return value.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+/** Horizon codes are lowercase ("1m", "1d"); several UI labels are uppercased
+ *  by CSS, which would turn "1m" into "1M" and read as one month. Spell them. */
+export function horizonLabel(horizon: string): string {
+  const match = /^(\d+)([md])$/.exec(horizon);
+  if (!match) return horizon;
+  const [, count, unit] = match;
+  const noun = unit === 'm' ? 'min' : 'day';
+  return `${count} ${noun}${count === '1' ? '' : 's'}`;
 }

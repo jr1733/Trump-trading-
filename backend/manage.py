@@ -6,7 +6,8 @@
     python manage.py import FILE       # load a CSV/JSON archive of your own
     python manage.py poll              # poll every enabled source once
     python manage.py pipeline          # process everything unprocessed
-    python manage.py demo              # seed + archive + poll + pipeline
+    python manage.py demo              # seed + archive + poll + pipeline + embed
+    python manage.py embed             # (re)build embeddings for similarity search
     python manage.py status            # counts, source health, LLM spend
 """
 
@@ -69,6 +70,21 @@ def cmd_demo(args: argparse.Namespace) -> None:
     cmd_poll(args)
     print("processing archive + live items (this builds the historical sample)...")
     cmd_pipeline(args)
+    print("embedding events for similarity search...")
+    cmd_embed(args)
+
+
+def cmd_embed(args: argparse.Namespace) -> None:
+    from app.embeddings.service import EmbeddingService
+
+    with session_scope() as db:
+        service = EmbeddingService(db)
+        written = service.backfill(limit=args.limit)
+        remaining = len(service.pending_events(limit=100000))
+        provider, dim, label = service.provider.name, service.provider.dim, service.provider.label
+    print(f"  provider: {provider} ({dim}d)")
+    print(f"  measure:  {label}")
+    print(f"  embedded: {written}  remaining: {remaining}")
 
 
 def cmd_status(_: argparse.Namespace) -> None:
@@ -122,6 +138,10 @@ def main() -> None:
     demo = sub.add_parser("demo")
     demo.add_argument("--limit", type=int, default=2000)
     demo.set_defaults(func=cmd_demo)
+
+    embed = sub.add_parser("embed")
+    embed.add_argument("--limit", type=int, default=5000)
+    embed.set_defaults(func=cmd_embed)
 
     sub.add_parser("status").set_defaults(func=cmd_status)
 

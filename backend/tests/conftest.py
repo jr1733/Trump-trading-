@@ -12,13 +12,22 @@ from __future__ import annotations
 import datetime as dt
 import os
 
-os.environ.setdefault(
-    "DATABASE_URL",
-    os.environ.get(
-        "TEST_DATABASE_URL",
-        "postgresql+psycopg://postgres:postgres@127.0.0.1:5432/trumpmarket_test",
-    ),
+DEFAULT_TEST_DATABASE_URL = (
+    "postgresql+psycopg://postgres:postgres@127.0.0.1:5432/trumpmarket_test"
 )
+
+# The suite drops and recreates every table, so it must never be able to point
+# at a real database. DATABASE_URL is *overridden*, not defaulted: with
+# `setdefault`, running `DATABASE_URL=... pytest` would wipe that database.
+_test_url = os.environ.get("TEST_DATABASE_URL", DEFAULT_TEST_DATABASE_URL)
+_database_name = _test_url.rsplit("/", 1)[-1].split("?")[0]
+if "test" not in _database_name.lower():
+    raise RuntimeError(
+        f"refusing to run the test suite against database {_database_name!r}: "
+        "the suite drops every table, so its name must contain 'test'. "
+        "Set TEST_DATABASE_URL to a throwaway database."
+    )
+os.environ["DATABASE_URL"] = _test_url
 os.environ.setdefault("APP_AUTH_TOKEN", "test-token")
 os.environ.setdefault("ENABLED_SOURCES", "mock")
 os.environ.setdefault("MARKET_DATA_PROVIDER", "mock")
@@ -37,6 +46,17 @@ UTC = dt.timezone.utc
 
 @pytest.fixture(scope="session", autouse=True)
 def _schema():
+    # pgvector is a hard requirement from Phase 2 on: event_embeddings uses the
+    # `vector` type. Fail here with a clear message rather than deep in a query.
+    with engine.begin() as connection:
+        try:
+            connection.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
+        except Exception as exc:  # pragma: no cover - environment problem
+            pytest.exit(
+                "pgvector is required. Install postgresql-<version>-pgvector, or "
+                f"use the pgvector/pgvector image. ({exc})",
+                returncode=1,
+            )
     Base.metadata.drop_all(engine)
     Base.metadata.create_all(engine)
     yield

@@ -381,7 +381,12 @@ def push_status(db: Session = Depends(get_db), user: User = Depends(current_user
         # Only the PUBLIC key is ever sent to the browser.
         "public_key": settings.web_push_public_key,
         "configured": settings.push_enabled,
-        "phase": "Web Push delivery lands in Phase 2; subscriptions are stored now.",
+        "phase": (
+            "Web Push is active."
+            if settings.push_enabled
+            else "Set WEB_PUSH_PUBLIC_KEY and WEB_PUSH_PRIVATE_KEY to enable push delivery. "
+            "Until then the notification centre is the delivery channel."
+        ),
         "subscriptions": [
             {
                 "id": s.id,

@@ -11,3 +11,7 @@ httpx==0.28.1
 feedparser==6.0.14
 APScheduler==3.11.3
 anthropic==1.6.0
+
+# Phase 2
+pgvector==0.3.6
+pywebpush==2.5.0

@@ -1,0 +1,14 @@
+# OPTIONAL: real semantic embeddings.
+#
+# Kept out of requirements.txt on purpose. sentence-transformers pulls in torch,
+# which is ~2 GB installed and dominates both the image size and the cold-start
+# time on a small VPS. The app ships with a dependency-free hashing embedder
+# that is lexical rather than semantic, and the UI labels which one produced a
+# similarity score -- so turning this on is a deliberate, visible upgrade.
+#
+#   pip install -r requirements-embeddings.txt
+#   EMBEDDING_PROVIDER=sentence-transformers
+#
+# Use the CPU-only torch wheel unless you actually have a GPU:
+#   pip install torch --index-url https://download.pytorch.org/whl/cpu
+sentence-transformers==3.3.1

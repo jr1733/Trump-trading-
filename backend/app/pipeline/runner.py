@@ -27,6 +27,7 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
 from ..config import settings
+from ..embeddings.service import EmbeddingService
 from ..llm.client import AnthropicClient
 from ..market.service import MarketDataService
 from ..models import (
@@ -41,6 +42,7 @@ from ..models import (
 )
 from . import analysis as analysis_mod
 from . import historical, notifications, relevance, signals, ticker_match
+from .push import build_push_provider
 
 log = logging.getLogger(__name__)
 
@@ -143,9 +145,17 @@ def build_signals_for_event(
     market: MarketDataService | None = None,
     *,
     include_low_confidence: bool = False,
+    embeddings: EmbeddingService | None = None,
 ) -> list[Signal]:
     """Historical response + signal for each ticker on an event. Idempotent."""
     market = market or MarketDataService(db)
+    if embeddings is None:
+        try:
+            embeddings = EmbeddingService(db)
+        except Exception as exc:
+            # Embeddings are an enhancement: without them novelty falls back to
+            # the lexical measure and everything else is unaffected.
+            log.warning("embedding service unavailable: %s", exc)
     horizon = settings.signal_primary_horizon
     available = market.available_horizons()
     if horizon not in available:
@@ -166,14 +176,15 @@ def build_signals_for_event(
         model_confidence = 0.35
         sentiment_source = "rule_based"
 
-    novelty_value, max_similarity = historical.novelty(db, event)
+    novelty = historical.novelty(db, event, embeddings=embeddings)
 
     written: list[Signal] = []
     for link in event.tickers:
         if link.confidence == "LOW" and not include_low_confidence:
             continue
         comparable = historical.build_comparable_set(
-            db, market, event=event, ticker=link.ticker, horizons=available
+            db, market, event=event, ticker=link.ticker, horizons=available,
+            embeddings=embeddings,
         )
         stats = comparable.stats.get(horizon)
         result = signals.compute_signal(
@@ -181,8 +192,8 @@ def build_signals_for_event(
             sentiment_source=sentiment_source,
             model_confidence=model_confidence,
             stats=stats,
-            novelty_value=novelty_value,
-            max_similarity=max_similarity,
+            novelty_value=novelty.value,
+            max_similarity=novelty.max_similarity,
             horizon=horizon,
             ticker_confidence=link.confidence,
             sentiment_model=sentiment_model,
@@ -200,9 +211,10 @@ def build_signals_for_event(
                 "contributions": result.contributions,
                 "sentiment_source": sentiment_source,
                 "sentiment_model": sentiment_model,
-                "novelty_raw": novelty_value,
-                "max_similarity_30d": max_similarity,
-                "similarity_measure": "lexical token-set (Jaccard) -- Phase 1",
+                "novelty_raw": novelty.value,
+                "max_similarity_30d": novelty.max_similarity,
+                "similarity_measure": novelty.measure,
+                "most_similar_event_id": novelty.matched_event_id,
                 "notes": result.notes,
             },
             "historical_stats": comparable.as_dict(),
@@ -237,6 +249,7 @@ def process_raw_event(
     market: MarketDataService | None = None,
     push_provider: notifications.PushProvider | None = None,
     report: PipelineReport | None = None,
+    embeddings: EmbeddingService | None = None,
 ) -> Event | None:
     report = report or PipelineReport()
     user = primary_user(db)
@@ -307,6 +320,14 @@ def process_raw_event(
     ticker_match.apply_matches(db, event, matches)
     db.refresh(event)
 
+    # Embed before the signal is built, so novelty can use the vector for this
+    # event rather than falling back to the lexical measure on its first pass.
+    if embeddings is not None:
+        try:
+            embeddings.embed_event(event)
+        except Exception as exc:
+            log.warning("could not embed event %s: %s", event.id, exc)
+
     if event.is_historical:
         # Archive rows are the *sample*, not the subject: no signal, no alert.
         event.pipeline_stage = "archived"
@@ -315,7 +336,7 @@ def process_raw_event(
         return event
 
     # --- HISTORICAL RESPONSE + SIGNAL ------------------------------------
-    written = build_signals_for_event(db, event, market)
+    written = build_signals_for_event(db, event, market, embeddings=embeddings)
     report.signals_written += len(written)
 
     # --- NOTIFICATION RULES (only now that the event has a stable ID) ----
@@ -323,8 +344,9 @@ def process_raw_event(
         db, user_id=user.id, event=event, signals=written
     )
     report.notifications_created += len(created_notes)
+    provider = push_provider or build_push_provider()
     for note in created_notes:
-        notifications.deliver_push(db, note, push_provider)
+        notifications.deliver_push(db, note, provider)
 
     event.pipeline_stage = "complete"
     event.processing_timestamp = utcnow()
@@ -348,6 +370,11 @@ def run_pipeline(
 
     market = market or MarketDataService(db)
     client = client or AnthropicClient()
+    try:
+        embeddings = EmbeddingService(db)
+    except Exception as exc:
+        log.warning("embeddings disabled for this run: %s", exc)
+        embeddings = None
 
     stmt = (
         select(RawEvent)
@@ -367,6 +394,7 @@ def run_pipeline(
                 market=market,
                 push_provider=push_provider,
                 report=report,
+                embeddings=embeddings,
             )
             db.commit()
         except Exception as exc:

@@ -175,6 +175,9 @@ export interface AppConfig {
   llm_mode: string;
   market_provider: string;
   supports_intraday: boolean;
+  embedding_provider: string;
+  embedding_semantic: boolean;
+  embedding_label: string;
   signal_weights: Record<string, number>;
   signal_thresholds: Record<string, number>;
   signal_return_scale: number;

@@ -21,8 +21,14 @@ migrate:  ## Apply database migrations
 seed:  ## Seed reference data and the default user
 	cd backend && ../$(PY) manage.py seed
 
-demo:  ## Seed + load the sample archive + poll + run the pipeline
+demo:  ## Seed + load the sample archive + poll + run the pipeline + embed
 	cd backend && ../$(PY) manage.py demo
+
+embed:  ## Embed events that have no vector (or whose vector is stale)
+	cd backend && ../$(PY) manage.py embed
+
+vapid:  ## Generate a VAPID keypair for Web Push
+	$(PY) scripts/generate_vapid_keys.py
 
 api:  ## Run the API on :8000
 	cd backend && ../$(PY) -m uvicorn app.main:app --reload --port 8000

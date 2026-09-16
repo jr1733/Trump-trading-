@@ -8,7 +8,7 @@
 import { useState } from 'react';
 
 import type { HorizonStat, Signal } from '../lib/api';
-import { num, pct, signed, titleCase } from '../lib/format';
+import { horizonLabel, num, pct, signed, titleCase } from '../lib/format';
 import { SampleFlag } from './ui';
 
 function ComponentRow({
@@ -57,7 +57,7 @@ function StatsTable({ stats }: { stats: Record<string, HorizonStat> }) {
           {rows.map((stat) => (
             <tr key={stat.horizon} className="border-t border-edge/60">
               <td className="py-1.5 pr-2">
-                {stat.horizon}
+                {horizonLabel(stat.horizon)}
                 {stat.flag !== 'ok' && (
                   <span className={stat.flag === 'limited' ? ' text-warn' : ' text-bear'}> *</span>
                 )}
@@ -149,7 +149,7 @@ export default function WhyPanel({ signal, open: initial = false }: { signal: Si
                 sentiment: {sentimentSource}
                 {sentimentModel ? ` (${sentimentModel})` : ''}
               </span>
-              <span className="chip bg-edge text-muted">horizon: {signal.horizon}</span>
+              <span className="chip bg-edge text-muted">horizon: {horizonLabel(signal.horizon)}</span>
               {typeof maxSimilarity === 'number' && (
                 <span className="chip bg-edge text-muted">
                   max similarity 30d: {num(maxSimilarity)}

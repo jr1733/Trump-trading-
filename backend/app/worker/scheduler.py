@@ -18,6 +18,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 
 from ..config import settings
 from ..db import SessionLocal, advisory_lock, session_scope
+from ..embeddings.service import EmbeddingService
 from ..llm.fake import build_client
 from ..models import JobRun, utcnow
 from ..pipeline import runner
@@ -82,6 +83,23 @@ def health_job(db) -> dict:
     return {"alerts": len(runner.check_source_health(db))}
 
 
+def embed_job(db) -> dict:
+    """Keep vectors current for similarity search and novelty."""
+    service = EmbeddingService(db)
+    written = service.backfill(limit=300)
+    db.commit()
+    return {"embedded": written, "provider": service.provider.name}
+
+
+def push_retry_job(db) -> dict:
+    """Retry due push deliveries, then prune long-dead subscriptions."""
+    from ..pipeline.push import cleanup_expired_subscriptions, retry_failed_deliveries
+
+    result = retry_failed_deliveries(db)
+    result["subscriptions_pruned"] = cleanup_expired_subscriptions(db)
+    return result
+
+
 def build_scheduler() -> BackgroundScheduler:
     scheduler = BackgroundScheduler(timezone="UTC")
     # The poller runs every minute and decides per source whether that source is
@@ -118,6 +136,24 @@ def build_scheduler() -> BackgroundScheduler:
         max_instances=1,
         coalesce=True,
     )
+    # Embedding runs on its own cadence: the pipeline embeds each event inline,
+    # so this only catches backfills and provider changes.
+    scheduler.add_job(
+        lambda: _run_job("embed", embed_job),
+        "interval",
+        minutes=5,
+        id="embed",
+        max_instances=1,
+        coalesce=True,
+    )
+    scheduler.add_job(
+        lambda: _run_job("push_retry", push_retry_job),
+        "interval",
+        minutes=2,
+        id="push_retry",
+        max_instances=1,
+        coalesce=True,
+    )
     return scheduler
 
 
@@ -147,6 +183,7 @@ def main() -> None:  # pragma: no cover - process entry point
     # Run one pass immediately so a fresh container has data without waiting.
     _run_job("poll", poll_job)
     _run_job("pipeline", pipeline_job)
+    _run_job("embed", embed_job)
 
     try:
         while not stopping:

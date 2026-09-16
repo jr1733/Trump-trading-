@@ -209,6 +209,26 @@ class MarketDataService:
         row = self.db.execute(stmt).scalars().first()
         return (row.ts, float(row.adjusted_close or row.close)) if row else None
 
+    def daily_closes(self, symbol: str, start: dt.date, end: dt.date) -> dict[dt.date, float]:
+        """Every cached daily close in a range, in one query.
+
+        Callers that need a whole window (the event study fits a market model
+        over ~180 sessions) must use this rather than looping `close_on`, which
+        would issue one query per day per symbol.
+        """
+        rows = self.db.execute(
+            select(MarketPrice.ts, MarketPrice.close, MarketPrice.adjusted_close).where(
+                MarketPrice.symbol == symbol.upper(),
+                MarketPrice.interval == "1d",
+                MarketPrice.ts >= mcal.session_open_utc(start) - dt.timedelta(hours=12),
+                MarketPrice.ts <= mcal.session_open_utc(end) + dt.timedelta(hours=12),
+            )
+        ).all()
+        return {
+            row.ts.astimezone(mcal.EASTERN).date(): float(row.adjusted_close or row.close)
+            for row in rows
+        }
+
     def price_at(self, symbol: str, moment: dt.datetime, interval: str) -> tuple[dt.datetime, float] | None:
         stmt = (
             select(MarketPrice)

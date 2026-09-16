@@ -117,8 +117,9 @@ export default function Settings({ onSignedOut }: { onSignedOut: () => void }) {
     }
     if (!push.data?.public_key) {
       setMessage(
-        'Permission granted. Web Push delivery needs VAPID keys on the server (Phase 2); ' +
-          'until then the notification centre is the delivery channel.',
+        'Permission granted, but the server has no VAPID keys, so nothing can be pushed. ' +
+          'Generate a keypair (scripts/generate_vapid_keys.py) and set WEB_PUSH_PUBLIC_KEY / ' +
+          'WEB_PUSH_PRIVATE_KEY. The notification centre keeps working meanwhile.',
       );
       return;
     }
@@ -427,6 +428,13 @@ export default function Settings({ onSignedOut }: { onSignedOut: () => void }) {
               {config.data.supports_intraday ? ' (intraday available)' : ' (daily bars only)'} ·
               analysis: {config.data.llm_mode}
             </p>
+            <p className="mt-2 text-muted">
+              Similarity: {config.data.embedding_label}
+              {config.data.embedding_semantic
+                ? ''
+                : ' — install requirements-embeddings.txt and set ' +
+                  'EMBEDDING_PROVIDER=sentence-transformers for semantic matching.'}
+            </p>
           </div>
         )}
       </Section>
@@ -445,6 +453,16 @@ export default function Settings({ onSignedOut }: { onSignedOut: () => void }) {
           </button>
           <button className="btn" disabled={busy} onClick={() => runOperation('/admin/seed', 'Seed data')}>
             Seed + load archive
+          </button>
+          <button className="btn" disabled={busy} onClick={() => runOperation('/admin/embed', 'Embed events')}>
+            Embed events
+          </button>
+          <button
+            className="btn"
+            disabled={busy}
+            onClick={() => runOperation('/admin/push-retry', 'Retry push')}
+          >
+            Retry failed push
           </button>
         </div>
       </Section>

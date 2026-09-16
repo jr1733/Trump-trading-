@@ -58,6 +58,30 @@ class Settings(BaseSettings):
     # Results are stamped with the model name "canned-mock" in the UI.
     llm_fake_mode: bool = False
 
+    # --- embeddings (Phase 2) ---------------------------------------------
+    # hashing               -- dependency-free, deterministic, LEXICAL not semantic
+    # sentence-transformers -- real local model (see requirements-embeddings.txt)
+    embedding_provider: str = "hashing"
+    embedding_model: str = "sentence-transformers/all-MiniLM-L6-v2"
+    # Both providers emit this dimension, so switching providers needs a
+    # re-embed but never a schema migration. 384 = all-MiniLM-L6-v2.
+    embedding_dim: int = 384
+    embedding_batch_size: int = 32
+    # Cosine similarity floor for "similar events". Below this, two events are
+    # not treated as comparable however close they rank.
+    # Left unset so each provider's own threshold applies; set it to override.
+    similarity_threshold: float | None = None
+    similar_events_limit: int = 10
+    novelty_window_days: int = 30
+
+    # --- event study (Phase 2) --------------------------------------------
+    # Market-model estimation window, in trading days before the event.
+    event_study_estimation_days: int = 180
+    # Gap between the estimation window and the event, so the run-up does not
+    # contaminate the alpha/beta estimate.
+    event_study_gap_days: int = 5
+    event_study_min_observations: int = 60
+
     # --- market data ------------------------------------------------------
     market_data_provider: str = "mock"  # mock | stooq
     market_data_api_key: str | None = None
@@ -78,10 +102,15 @@ class Settings(BaseSettings):
     http_timeout_seconds: float = 20.0
     http_user_agent: str = "TrumpEventMarketIntelligence/0.1 (research tool; contact: operator)"
 
-    # --- web push (Phase 2; keys absent => push disabled, in-app still works)
+    # --- web push (keys absent => push disabled, in-app still works) -------
     web_push_public_key: str | None = None
     web_push_private_key: str | None = None
     web_push_subject: str | None = None
+    web_push_ttl_seconds: int = 3600
+    # A push that has failed this many times in a row retires the subscription,
+    # so a permanently broken endpoint stops consuming retry budget.
+    web_push_max_failures: int = 5
+    web_push_max_retries: int = 3
 
     # --- email (Phase 3; credentials absent => email disabled) -------------
     smtp_host: str | None = None

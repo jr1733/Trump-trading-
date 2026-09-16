@@ -197,3 +197,36 @@ def test_mock_provider_is_deterministic():
     b = MockMarketDataProvider().fetch_daily("AAPL", dt.date(2026, 3, 2), dt.date(2026, 3, 6))
     assert [bar.close for bar in a] == [bar.close for bar in b]
     assert all(bar.ts.tzinfo is not None for bar in a)
+
+
+def test_mock_provider_has_a_market_factor():
+    """Equities must co-move with the benchmark, or the market model is untestable."""
+    provider = MockMarketDataProvider()
+    start, end = dt.date(2025, 1, 2), dt.date(2026, 6, 30)
+
+    def returns(symbol: str) -> dict[dt.date, float]:
+        bars = provider.fetch_daily(symbol, start, end)
+        out: dict[dt.date, float] = {}
+        for prior, bar in zip(bars, bars[1:]):
+            out[bar.ts.date()] = (bar.close / prior.close) - 1.0
+        return out
+
+    market = returns("SPY")
+    stock = returns("AAPL")
+    days = sorted(set(market) & set(stock))
+    assert len(days) > 200
+
+    from app.pipeline.event_study import ordinary_least_squares
+
+    model = ordinary_least_squares([market[d] for d in days], [stock[d] for d in days])
+    assert model is not None
+    assert model.beta == pytest.approx(provider.beta("AAPL"), abs=0.25)
+    assert model.beta > 0.2, "a beta near zero means there is no factor structure"
+
+
+def test_mock_betas_are_deterministic_and_plausible():
+    provider = MockMarketDataProvider()
+    assert provider.beta("SPY") == 1.0
+    assert provider.beta("AAPL") == MockMarketDataProvider().beta("AAPL")
+    for symbol in ("AAPL", "NVDA", "XOM", "LMT", "XLK"):
+        assert 0.4 < provider.beta(symbol) < 2.0

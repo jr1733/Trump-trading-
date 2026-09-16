@@ -525,6 +525,11 @@ def deliver_push(
             sub.expired_at = utcnow()
         elif status == "FAILED":
             sub.failure_count += 1
+            # Arm a retry so a transient 503 is not a lost notification. The
+            # import is local because push.py imports this module.
+            from .push import schedule_retry
+
+            schedule_retry(delivery)
         else:
             sub.last_used_at = utcnow()
             sub.failure_count = 0

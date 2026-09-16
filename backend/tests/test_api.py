@@ -70,7 +70,7 @@ def test_malformed_authorization_header_is_rejected(client):
 
 def test_public_config_needs_no_auth_and_leaks_no_secrets(client):
     body = client.get("/api/config").json()
-    assert body["phase"] == 1
+    assert body["phase"] == 2
     blob = str(body).lower()
     for secret in ("anthropic_api_key", "sk-ant", "smtp_password", "web_push_private"):
         assert secret not in blob
@@ -286,3 +286,65 @@ def test_no_endpoint_emits_trading_language(client):
         blob = client.get(path, headers=AUTH).text.lower()
         for phrase in banned:
             assert phrase not in blob, f"{path} contains {phrase!r}"
+
+
+# --- Phase 2 endpoints ----------------------------------------------------
+def test_similar_events_endpoint(client, db):
+    event = db.execute(select(Event)).scalars().first()
+    body = client.get(f"/api/events/{event.id}/similar", headers=AUTH).json()
+
+    assert body["event_id"] == event.id
+    assert body["provider"] == "hashing"
+    assert body["semantic"] is False, "the UI must be able to say this is lexical"
+    assert "measure" in body and body["measure"]
+    assert isinstance(body["items"], list)
+
+
+def test_similar_events_endpoint_404s_on_a_missing_event(client):
+    assert client.get("/api/events/nope/similar", headers=AUTH).status_code == 404
+
+
+def test_similar_events_requires_auth(client, db):
+    event = db.execute(select(Event)).scalars().first()
+    assert client.get(f"/api/events/{event.id}/similar").status_code == 401
+
+
+def test_event_study_endpoint(client):
+    body = client.get("/api/tickers/AAPL/event-study", headers=AUTH).json()
+    assert body["ticker"] == "AAPL"
+    assert body["benchmark"] == settings.benchmark_symbol
+    assert "windows" in body and "skipped" in body
+    assert body["sample_flag"] in {"ok", "limited", "unreliable"}
+    assert body["notes"], "the method must be stated alongside the numbers"
+
+
+def test_event_study_endpoint_requires_auth(client):
+    assert client.get("/api/tickers/AAPL/event-study").status_code == 401
+
+
+def test_embedding_status_endpoint(client):
+    body = client.get("/api/admin/embeddings", headers=AUTH).json()
+    assert body["provider"] == "hashing"
+    assert body["dim"] == settings.embedding_dim
+    assert body["events_total"] >= 1
+    assert body["semantic"] is False
+
+
+def test_embedding_backfill_endpoint_is_idempotent(client):
+    first = client.post("/api/admin/embed", headers=AUTH).json()
+    assert first["provider"] == "hashing"
+    second = client.post("/api/admin/embed", headers=AUTH).json()
+    assert second["embedded"] == 0
+    assert second["remaining"] == 0
+
+
+def test_push_retry_endpoint(client):
+    body = client.post("/api/admin/push-retry", headers=AUTH).json()
+    assert {"attempted", "sent", "failed", "expired", "subscriptions_pruned"} <= set(body)
+
+
+def test_config_reports_the_embedding_provider(client):
+    body = client.get("/api/config").json()
+    assert body["embedding_provider"] == "hashing"
+    assert body["embedding_semantic"] is False
+    assert "not meaning" in body["embedding_label"]

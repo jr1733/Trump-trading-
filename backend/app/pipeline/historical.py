@@ -1,8 +1,11 @@
 """Historical response: find comparable past events and summarise what followed.
 
-Comparability in Phase 1 is `same event_type` AND (`same ticker` OR `same sector`).
-Phase 2 adds embedding similarity; the `similarity` column and the `match_basis`
-string are already in place for it.
+Comparability is `same event_type` AND (`same ticker` OR `same sector`). Phase 2
+annotates each comparable event with its embedding cosine similarity, but does
+NOT let similarity define the sample: a score that could silently add or drop
+events would make the sample size -- the number the whole signal is gated on --
+depend on a tunable threshold. Similarity is reporting; event type and ticker
+are the sample.
 
 **Look-ahead prevention** is enforced here, not left to the caller: every query
 is bounded by `before` (the subject event's timestamp), so a historical statistic
@@ -13,6 +16,7 @@ takes `before` as a required argument for exactly that reason.
 from __future__ import annotations
 
 import datetime as dt
+import logging
 import statistics
 from dataclasses import dataclass, field
 
@@ -22,6 +26,8 @@ from sqlalchemy.orm import Session
 from ..config import settings
 from ..market.service import MarketDataService
 from ..models import Event, EventTicker, HistoricalEventMatch, Ticker
+
+log = logging.getLogger(__name__)
 
 
 @dataclass
@@ -195,8 +201,15 @@ def build_comparable_set(
     ticker: str,
     horizons: list[str] | None = None,
     persist: bool = True,
+    embeddings=None,
 ) -> ComparableSet:
-    """Historical response for one (event, ticker) pair."""
+    """Historical response for one (event, ticker) pair.
+
+    When an embedding service is supplied, each comparable event also carries
+    its cosine similarity to the subject. That is reporting only -- the sample
+    is still defined by event type and ticker/sector, so a similarity score
+    cannot quietly widen or narrow the statistical sample.
+    """
     horizons = horizons or market.available_horizons()
     past, basis = find_comparable_events(
         db,
@@ -205,6 +218,18 @@ def build_comparable_set(
         before=event.source_timestamp,
         exclude_event_id=event.id,
     )
+
+    similarity_by_event: dict[str, float] = {}
+    if embeddings is not None and past:
+        try:
+            similarity_by_event = {
+                match.event.id: match.similarity
+                for match in embeddings.similar_events(
+                    event, limit=len(past) * 2 + 10, threshold=-1.0
+                )
+            }
+        except Exception as exc:
+            log.warning("similarity annotation failed: %s", exc)
 
     result = ComparableSet(ticker=ticker.upper(), event_type=event.event_type, match_basis=basis)
     per_horizon_raw: dict[str, list[float]] = {h: [] for h in horizons}
@@ -226,12 +251,14 @@ def build_comparable_set(
                 "title": match.title or (match.text[:120] if match.text else ""),
                 "source": match.source_key,
                 "source_timestamp": match.source_timestamp.isoformat(),
-                "similarity": None,  # populated by embeddings in Phase 2
+                "similarity": similarity_by_event.get(match.id),
                 "returns": serialised,
             }
         )
         if persist:
-            _persist_match(db, event, match, ticker, serialised)
+            _persist_match(
+                db, event, match, ticker, serialised, similarity_by_event.get(match.id)
+            )
 
     for horizon in horizons:
         result.stats[horizon] = summarise(
@@ -241,7 +268,12 @@ def build_comparable_set(
 
 
 def _persist_match(
-    db: Session, event: Event, match: Event, ticker: str, returns: dict
+    db: Session,
+    event: Event,
+    match: Event,
+    ticker: str,
+    returns: dict,
+    similarity: float | None = None,
 ) -> None:
     existing = (
         db.execute(
@@ -256,27 +288,57 @@ def _persist_match(
     )
     if existing:
         existing.returns = returns
+        if similarity is not None:
+            existing.similarity = similarity
         return
     db.add(
         HistoricalEventMatch(
             event_id=event.id,
             matched_event_id=match.id,
             ticker=ticker.upper(),
-            similarity=0.0,
+            similarity=similarity or 0.0,
             match_basis="event_type+ticker",
             returns=returns,
         )
     )
 
 
-def novelty(db: Session, event: Event, *, window_days: int = 30) -> tuple[float, float]:
+@dataclass
+class Novelty:
+    value: float           # 1 - max_similarity, in [0, 1]
+    max_similarity: float
+    measure: str           # which similarity function produced it
+    matched_event_id: str | None = None
+
+
+def novelty(
+    db: Session,
+    event: Event,
+    *,
+    window_days: int = 30,
+    embeddings=None,
+) -> Novelty:
     """1 - max similarity to events in the trailing `window_days`.
 
-    Phase 1 uses a lexical token-set (Jaccard) similarity. Phase 2 replaces the
-    similarity function with embeddings; the returned contract is unchanged. The
-    "Why?" panel names which measure produced the number so it is never mistaken
-    for semantic similarity.
+    Uses embeddings when a vector exists for this event, and falls back to the
+    Phase 1 lexical token-set (Jaccard) measure otherwise -- a brand-new event
+    that the embedding worker has not reached yet must still get a signal. The
+    `measure` field names whichever ran, and the "Why?" panel shows it, so a
+    lexical score is never presented as a semantic one.
     """
+    if embeddings is not None:
+        try:
+            similarity, matched_id = embeddings.max_similarity(event, window_days=window_days)
+            return Novelty(
+                value=round(1.0 - similarity, 4),
+                max_similarity=round(similarity, 4),
+                measure=embeddings.provider.label,
+                matched_event_id=matched_id,
+            )
+        except Exception as exc:
+            # A vector search failure must not cost us the signal.
+            log.warning("embedding novelty failed, falling back to lexical: %s", exc)
+
     from .ticker_match import jaccard, tokenize
 
     window_start = event.source_timestamp - dt.timedelta(days=window_days)
@@ -292,11 +354,17 @@ def novelty(db: Session, event: Event, *, window_days: int = 30) -> tuple[float,
     )
     recent = list(db.execute(stmt).scalars())
     if not recent:
-        return 1.0, 0.0
+        return Novelty(1.0, 0.0, "lexical token-set (Jaccard) -- no comparison set")
 
     subject = tokenize(f"{event.title or ''} {event.text}")
-    best = max(
-        (jaccard(subject, tokenize(f"{other.title or ''} {other.text}")) for other in recent),
-        default=0.0,
+    best_score, best_id = 0.0, None
+    for other in recent:
+        score = jaccard(subject, tokenize(f"{other.title or ''} {other.text}"))
+        if score > best_score:
+            best_score, best_id = score, other.id
+    return Novelty(
+        value=round(1.0 - best_score, 4),
+        max_similarity=round(best_score, 4),
+        measure="lexical token-set (Jaccard) -- word overlap, not meaning",
+        matched_event_id=best_id,
     )
-    return round(1.0 - best, 4), round(best, 4)

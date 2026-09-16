@@ -1,10 +1,11 @@
 import { useEffect, useState } from 'react';
 import { useParams } from 'react-router-dom';
 
+import EventStudy from '../components/EventStudy';
 import WhyPanel from '../components/WhyPanel';
 import { Disclaimer, Empty, ErrorBox, Section, Spinner, Stat } from '../components/ui';
 import { api, type HorizonStat, type Signal } from '../lib/api';
-import { labelColour, localTime, num, pct, signed, titleCase } from '../lib/format';
+import { horizonLabel, labelColour, localTime, num, pct, signed, titleCase } from '../lib/format';
 import { useApi } from '../lib/useApi';
 
 interface EventHistoryRow {
@@ -143,7 +144,7 @@ export default function TickerDetail() {
               <span className="text-lg font-bold tabular-nums">{signed(data.signal.score)}</span>
             </div>
             <div className="mt-1 text-xs text-muted">
-              horizon {data.signal.horizon} · confidence {num(data.signal.confidence)} · computed{' '}
+              horizon {horizonLabel(data.signal.horizon)} · confidence {num(data.signal.confidence)} · computed{' '}
               {localTime(data.signal.created_at)}
             </div>
             <WhyPanel signal={data.signal} open />
@@ -180,7 +181,7 @@ export default function TickerDetail() {
             {stats.map((stat) => (
               <Stat
                 key={stat.horizon}
-                label={`${stat.horizon} · N=${stat.n}`}
+                label={`${horizonLabel(stat.horizon)} · N=${stat.n}`}
                 value={
                   <span className={stat.flag === 'ok' ? '' : stat.flag === 'limited' ? 'text-warn' : 'text-bear'}>
                     {pct(stat.median)}
@@ -190,6 +191,15 @@ export default function TickerDetail() {
             ))}
           </div>
         )}
+      </Section>
+
+      <Section title="Event study">
+        <EventStudy symbol={data.symbol} />
+        <p className="mt-2 px-1 text-[11px] text-muted">
+          Abnormal returns against a per-ticker market model (alpha and beta estimated before each
+          event), rather than the simple benchmark subtraction used in the signal's historical
+          statistics.
+        </p>
       </Section>
 
       <Section title="Event history">
