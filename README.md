@@ -1,0 +1,437 @@
+# Event → Market Intelligence
+
+A mobile-first PWA that monitors public announcements and government information associated with
+Donald Trump, and shows **how comparable past events related to market movements**.
+
+> **This is a research and information tool.** It has no brokerage integration, places no orders,
+> manages no portfolio, and takes no autonomous action. What it computes are statistical
+> associations between past announcements and past price moves, from small and non-independent
+> samples. **Association is not causation, and nothing here is a forecast or a recommendation.**
+
+**Current status: Phase 1 complete.** See [Phase status](#phase-status) for exactly what works,
+what is mocked, and what is not built yet.
+
+---
+
+## Quick start (no API keys, no network)
+
+```bash
+cp .env.example .env
+docker compose up --build
+```
+
+Open <http://localhost:8080> and sign in with the `APP_AUTH_TOKEN` from your `.env`
+(`change-me-before-deploying` out of the box).
+
+That gives you: the mock source, deterministic synthetic market data, canned offline analyses, a
+286-event sample archive, a seeded watchlist and two alert rules. Everything in the UI is live —
+none of it needs a key.
+
+### Without Docker
+
+```bash
+make install            # creates .venv and installs backend deps
+createdb trumpmarket    # or point DATABASE_URL at any Postgres 14+
+export DATABASE_URL="postgresql+psycopg://postgres:postgres@localhost:5432/trumpmarket"
+export APP_AUTH_TOKEN=devtoken LLM_FAKE_MODE=true ENABLED_SOURCES=mock
+
+make migrate            # create the schema
+make demo               # seed + archive + poll + pipeline
+make api                # API on :8000
+
+# in a second terminal
+cd frontend && npm install && npm run dev   # UI on :5173, proxies /api to :8000
+```
+
+`make help` lists every target.
+
+---
+
+## What it does
+
+```
+SOURCE → NORMALISE → DEDUPLICATE → RELEVANCE (rules, then cheap model)
+→ ENTITY EXTRACTION → TICKER MATCHING → ANALYSIS → STORE (stable id)
+→ HISTORICAL RESPONSE → SIGNAL → EVALUATE NOTIFICATION RULES → DELIVER
+```
+
+Every stage is **idempotent**. Raw events are unique on `(source, external_id)`, events on their
+content hash, analyses on their content hash, signals on `(event, ticker)`, and notifications on
+an idempotency key. Re-running the worker over the same data produces no duplicate event, signal
+or notification — there is an end-to-end test that asserts exactly this.
+
+### Pages
+
+**Live · Watchlist · Tickers · Search · Notifications · Backtest · Settings**
+
+| Page | What it shows |
+|---|---|
+| **Live** | Market context (SPY/QQQ/VIX/10y), top signals, source status, notification summary, and the event feed. Sort by newest, signal strength, ticker, source or event type. |
+| **Ticker** (`/ticker/:symbol`) | Current signal with its "Why?" panel, event-time price chart, historical statistics per horizon, full event history with subsequent returns, and a one-tap watch toggle. |
+| **Search** | Postgres full-text search over every event, each hit annotated with what the price did afterwards, plus "create alert from this search". |
+| **Notifications** | Unread badge, read/unread, archive, delete, mark-all-read, and the per-channel delivery status of each notification. |
+| **Settings** | Notification permission and push status, quiet hours, thresholds, digest settings, a test-notification button, source health, the live signal weights, and manual poll/pipeline/seed triggers. |
+| **Backtest** | Phase 3. States the look-ahead and LLM-contamination rules the feature will be built under. |
+
+---
+
+## Signal
+
+A transparent score in `[-1, +1]`:
+
+```
+score = w1·sentiment
+      + w2·historical_median_abnormal_return_normalised
+      + w3·historical_consistency
+      + w4·novelty
+score = score × model_confidence × sample_size_factor
+```
+
+| Component | Definition |
+|---|---|
+| **sentiment** | The model's `sentiment` field, already in `[-1, 1]`. With no model available, the rule-based lexicon score stands in and the panel says so. |
+| **historical** | Median abnormal return across comparable past events at the primary horizon, divided by `SIGNAL_RETURN_SCALE` (default 0.05 — a 5% median abnormal move is full scale), clamped to `[-1, 1]`. |
+| **consistency** | How one-sided the sample is, signed by the median's direction: `2·max(pos%, neg%)/100 − 1`. A 50/50 split contributes 0; a 90/10 split contributes ±0.8. |
+| **novelty** | `1 − max_similarity_to_the_last_30_days`, **signed in the direction the other components already point**. Novelty has no direction of its own: a novel event is not bullish, merely less anticipated, so it can only amplify an existing lean, never create one. |
+| **model confidence** | Multiplies the whole score. A 0.3-confidence reading cannot produce a strong label. |
+| **sample-size factor** | `0.0` below N=10, `0.6` for N=10–19, `1.0` at N≥20. Below N=10 the historical and consistency components are **dropped entirely and their weight redistributed**, rather than silently shrinking the score. |
+
+Weights are renormalised over whichever components are active, so they always sum to 1. Market
+context is deliberately omitted in Phase 1.
+
+**Labels:** STRONGLY BULLISH ≥ 0.6 · BULLISH ≥ 0.2 · NEUTRAL · BEARISH ≤ −0.2 ·
+STRONGLY BEARISH ≤ −0.6. All thresholds and weights are configurable and are displayed in
+Settings.
+
+### The "Why?" panel
+
+Every signal carries one, and it is not optional. It lists each component's value, the weight
+applied, the contribution to the score, the sample size and flag, the full historical statistics
+per horizon, and **Important uncertainties** — small samples, non-independent events, regime
+change, low ticker-match confidence, a near-duplicate event in the last 30 days, and the standing
+reminder that association is not causation.
+
+### Sample-size honesty
+
+| N | Flag | Effect |
+|---|---|---|
+| < 10 | **unreliable** | Shown in the UI in red, given **zero weight** in the score. |
+| 10–19 | **limited** | Shown in amber, score scaled by 0.6. |
+| ≥ 20 | ok | Full weight. |
+
+---
+
+## Return conventions
+
+A return is never a bare number; it always carries the basis it was computed on.
+
+- **Reaction day** = the first session that can price the event in. An event during regular hours
+  reacts that session; an event at 2 a.m., after the close, or at the weekend maps to the **next
+  session open** and is labelled `next_open`.
+- **Daily baseline** = the close *before* the reaction day, so the reaction day's own move is
+  inside the `1d` return. `3d` and `5d` are three and five sessions counting the reaction day.
+- **Abnormal return** = raw return − benchmark return (SPY), and separately − sector ETF return
+  where the ticker is mapped to one.
+- **Intraday horizons (1/5/15/30/60 min) are computed only if the configured provider actually
+  returns intraday history for that date.** A horizon crossing the closing bell is omitted rather
+  than stretched into the next session. With the default free provider there is no intraday data,
+  so only 1d/3d/5d appear.
+
+US market hours, pre/after-market, weekends and the NYSE holiday calendar (including Good Friday
+and the 13:00 early closes) are handled in `app/market/calendar.py` and covered by tests.
+
+---
+
+## Data sources
+
+| Source | Status | Notes |
+|---|---|---|
+| **Mock** | ✅ working | Default for local dev. No network. |
+| **WhiteHouse.gov** | ✅ implemented | RSS with a candidate-URL list; feed paths move between administrations, so the list is configurable. |
+| **Federal Register** | ✅ implemented | Official, free, **no API key**. The authoritative record for executive orders and proclamations. Lags the press release by hours to days, so it backstops rather than races. |
+| **News RSS** | ✅ implemented | Configurable feeds. **Headline, publication, author, timestamp, URL and a short summary only** — full article text is never stored, and the truncation is enforced at ingestion. |
+| **Truth Social** | ⛔ **manual import only** | No official public API, and the terms of service prohibit unauthorised automated access. We ship the adapter interface, a mock, and a CSV/JSON importer — and refuse to scrape. See [`docs/PHASE0_FEASIBILITY.md`](docs/PHASE0_FEASIBILITY.md) §1.1. |
+| **Congress.gov** | ⏳ Phase 3 | Official free API; `CONGRESS_API_KEY` is already wired through. |
+| **OGE** | ⏳ Phase 3 | Public filings only. The schema has no field that could hold an inferred holding. |
+
+Enable sources with `ENABLED_SOURCES=mock,whitehouse,federal_register,news_rss`.
+
+**One failing source never affects another.** Each adapter runs in isolation, records its own
+health row (ONLINE / DEGRADED / ERROR with a failure counter), and repeated failures raise a
+system notification and show as degraded in the UI.
+
+### Importing an archive
+
+```bash
+# JSON or CSV. Accepts id/post_id, created_at/timestamp, text/content.
+cd backend && python manage.py import /path/to/posts.json --source truth_social
+```
+
+Or `POST /api/admin/import` with `{"source": "truth_social", "rows": [...]}`. Re-importing the
+same file inserts nothing.
+
+---
+
+## Configuration
+
+All configuration is environment variables; see [`.env.example`](.env.example) for the annotated
+list. **Secrets are read only from the environment and never reach the browser** — the sole value
+in the public `/api/config` endpoint is the Web Push *public* key, which is public by design.
+
+Key choices:
+
+- `MARKET_DATA_PROVIDER` — `mock` (synthetic, deterministic, supports intraday) or `stooq` (free,
+  no key, **daily bars only**).
+- `LLM_FAKE_MODE=true` — use the offline canned scorer instead of the API. Results are stamped
+  with the model name `canned-mock` everywhere they appear, so a canned reading is never mistaken
+  for a real one.
+- `ANTHROPIC_ANALYSIS_MODEL` — defaults to `claude-opus-5`. Switching to `claude-sonnet-5` cuts
+  the analysis bill by roughly 60% at the same traffic.
+
+---
+
+## Deployment
+
+**Recommendation: one small always-on VPS running `docker compose`** — e.g. Hetzner CX22
+(2 vCPU, 4 GB, ~$4.50/month).
+
+Why, in short: the workload is a **polling worker that must never sleep**, which disqualifies
+scale-to-zero free tiers on requirements rather than on price; app + worker + Postgres on one box
+comes in at roughly $6/month all-in, where managed equivalents run $21+; and Phase 2's local
+embedding model wants ~1 GB of RAM that a 256 MB managed instance does not have. The trade-off is
+that you own OS patching and backups. The best managed alternative inside budget is Fly.io with
+auto-stop **disabled** (~$12–14/month), at the cost of tighter memory for Phase 2.
+
+```bash
+# On the server
+git clone <your-repo> && cd Trump-trading-
+cp .env.example .env
+# Edit .env: set a real APP_AUTH_TOKEN, ENVIRONMENT=production, and
+# ENABLED_SOURCES=whitehouse,federal_register,news_rss
+# and MARKET_DATA_PROVIDER=stooq
+docker compose up -d --build
+docker compose logs -f worker
+```
+
+Put a TLS terminator in front (Caddy is two lines; nginx + certbot works too). **HTTPS is not
+optional** — service workers and the Push API only run on a secure origin, so without TLS the PWA
+will not install and push cannot work at all.
+
+Back up with `docker compose exec db pg_dump -U postgres trumpmarket | gzip > backup.sql.gz` on a
+cron.
+
+### Installing on iPhone
+
+1. Open the site in **Safari** (not Chrome — and on iOS, "Chrome" is WebKit anyway).
+2. Tap **Share** → **Add to Home Screen** → **Add**.
+3. Open the app **from the Home Screen icon**, not from a Safari tab.
+4. Go to **Settings → Enable notifications** and allow when prompted.
+
+Step 3 is not a formality: **iOS delivers Web Push only to an installed web app.** In a Safari
+tab the subscription cannot be created and no push will ever arrive. Settings shows
+"Installed to Home Screen: yes/no" so you can check.
+
+---
+
+## API key setup
+
+| Key | Needed for | How to get it |
+|---|---|---|
+| `ANTHROPIC_API_KEY` | Real relevance triage and full analysis. Without it, events still flow and the signal uses rule-based sentiment. | <https://console.anthropic.com> |
+| `CONGRESS_API_KEY` | Congress.gov source (Phase 3). | Free key from <https://api.data.gov/signup/> |
+| `MARKET_DATA_API_KEY` | Only if you swap in a provider that requires one (Alpha Vantage, Twelve Data). Stooq and the mock provider need nothing. | Provider's site |
+| `NEWS_API_KEY` | Optional paid news API. RSS needs no key. | Provider's site |
+
+### Web Push (VAPID) setup
+
+Phase 2 delivers push; the subscription plumbing and the schema are already in place, so the
+setup is:
+
+```bash
+# Option A — Node
+npx web-push generate-vapid-keys
+
+# Option B — OpenSSL
+openssl ecparam -genkey -name prime256v1 -out vapid_private.pem
+openssl ec -in vapid_private.pem -pubout -outform DER \
+  | tail -c 65 | base64 | tr -d '=+/' | tr '_-' '-_'
+```
+
+Put the public key in `WEB_PUSH_PUBLIC_KEY`, the private key in `WEB_PUSH_PRIVATE_KEY`, and a
+contact URI in `WEB_PUSH_SUBJECT` (e.g. `mailto:you@example.com`). **Only the public key is ever
+sent to the browser.** Restart, then re-enable notifications in Settings so a subscription is
+created against the new key — changing the key invalidates existing subscriptions.
+
+### SMTP (optional)
+
+Set `SMTP_HOST`, `SMTP_PORT`, `SMTP_USERNAME`, `SMTP_PASSWORD` and `EMAIL_FROM`. **Email disables
+itself automatically when `SMTP_HOST` or `EMAIL_FROM` is missing** — there is no half-enabled
+state. Send failures are logged to `email_delivery_logs` and never block event processing.
+
+---
+
+## Notification troubleshooting
+
+Work down this list; each step rules out the one below it.
+
+| Symptom | Check |
+|---|---|
+| **Nothing at all, not even in-app** | Settings → is "Notifications enabled" on? Are you inside quiet hours (Settings shows this live)? Has the hourly cap been hit? Press "Send test notification": it bypasses quiet hours and the rate limit, so if *that* does not appear, the problem is the worker or the API, not notifications. |
+| **In-app works, push does not** | Settings → "Push configured" must be yes (VAPID keys set) **and** "Installed to Home Screen" must be yes on iOS. Both are shown on the page. |
+| **iPhone shows no permission prompt** | The prompt only appears from a real tap, and only in an installed web app. Re-add to the Home Screen and tap "Enable notifications" again. |
+| **Push worked, then stopped** | The push service expires subscriptions. A 404/410 marks the subscription inactive — visible in Settings → Push subscriptions and in the data-quality view. Re-enable notifications to create a fresh one. |
+| **Alerts fire once, then never again** | That is the re-arm rule working: a threshold alert fires on *crossing*, then waits for the signal to return inside the band. Set `repeat_alerts` on the rule if you want repeats. |
+| **Too many alerts** | Raise `min_sample_size` and `min_confidence` on the rule; the seeded threshold rule already defaults to N≥10 and confidence≥0.3. Lower `max_per_hour`. |
+| **No events at all** | Settings → Sources. A source in ERROR shows its last error. Check `docker compose logs worker`, and `/api/admin/data-quality` for unprocessed rows. |
+| **Signals all say "unreliable"** | You have fewer than 10 comparable past events. Import a larger archive — that is the sample the statistics are computed from. |
+
+---
+
+## Testing
+
+```bash
+make test            # or: cd backend && python -m pytest -q
+```
+
+**203 tests, all passing.** They run against a real Postgres (`trumpmarket_test` by default;
+override with `TEST_DATABASE_URL`) because the idempotency guarantees are enforced by database
+constraints, and testing them against a fake would test nothing.
+
+Coverage maps to the spec's list: deduplication · ticker matching and confidence · timestamp and
+market-hours handling · JSON validation and the retry · return and abnormal-return calculation ·
+sample-size flags · signal calculation · look-ahead prevention · retry and backoff · rule
+evaluation · threshold crossing and re-arming · notification dedup · quiet hours · digest
+generation · push subscription register and expiry cleanup · email failure handling ·
+push-unavailable fallback · API auth and validation.
+
+The **end-to-end test** (`tests/test_e2e.py`) does exactly what the spec asks: inserts a mock
+event, runs the pipeline, generates a signal, matches a watchlist rule, creates an in-app
+notification, attempts a mock push delivery, then re-runs the worker and asserts that no
+duplicate event, signal, notification or delivery exists.
+
+### Mock dataset
+
+| File | Contents |
+|---|---|
+| `backend/app/seed/mock_events.json` | 12 recent items, including a deliberate republish (exercises dedup), a generic "apple pie" mention (exercises LOW-confidence ticker matching), and a golf post (exercises the relevance filter). |
+| `backend/app/seed/archive_events.json` | 286 synthetic past events spanning 2024–2026, sized so all three sample bands (ok / limited / unreliable) are visible. Regenerate with `scripts/generate_archive.py`. |
+| `backend/app/seed/canned_analyses.json` | Canned analyses used by `LLM_FAKE_MODE`. |
+| `backend/app/seed/tickers.json`, `aliases.json` | 32 instruments and 41 aliases, including the deliberately ambiguous ones. |
+
+Market prices are generated deterministically by the mock provider — same bars on every machine,
+every run.
+
+---
+
+## Phase status
+
+### Phase 1 — complete
+
+**Works:** single-user auth · PostgreSQL with Alembic migrations · background worker with
+per-source scheduling and Postgres advisory locks · mock / WhiteHouse / Federal Register / news
+RSS adapters · the full pipeline · market-data abstraction with mock and Stooq providers ·
+historical statistics and signal calculation with the mandatory "Why?" panel · all seven pages ·
+in-app notifications with rule evaluation, threshold crossing, re-arming and deduplication · the
+PWA shell (manifest, service worker, installable on iPhone) · the test suite and the end-to-end
+test.
+
+**Mocked:** market data (`mock` provider) and LLM analysis (`canned-mock`) by default in local
+development. Both are one environment variable away from real.
+
+**Needs a key:** real analysis (`ANTHROPIC_API_KEY`). Nothing else — the app is fully functional
+with zero keys.
+
+### Phase 2 — not built
+
+Web Push delivery (VAPID), the historical backfill importer's embedding pass, local
+`sentence-transformers` embeddings with pgvector, event studies with abnormal returns over an
+estimation window, and a Truth Social adapter *if* a terms-compliant feed is identified.
+
+The Phase 1 schema already carries `event_embeddings` and `push_subscriptions`, and the compose
+file already uses the pgvector image, so Phase 2 adds code rather than migrating data.
+
+### Phase 3 — not built
+
+Congress.gov, OGE, email, digests, search-to-alert scheduling, backtesting, the data-quality page
+as a UI (the endpoint exists at `/api/admin/data-quality`), and the admin cost page.
+
+---
+
+## Cost
+
+| Item | Estimate |
+|---|---|
+| VPS (Hetzner CX22) | ~$4.50/month |
+| Backups + domain | ~$2/month |
+| Market data (Stooq) | $0 |
+| Web Push (self-hosted VAPID) | $0 |
+| Anthropic API | ~$1–19/month depending on volume and model |
+| **Total** | **~$8–25/month** |
+
+The LLM figure is the one that moves. At ~200 raw items/day, the rule filter drops ~70% before
+any model call, ~60 reach Haiku triage and ~20 survive to full analysis: roughly $19/month on
+`claude-opus-5`, or ~$6/month on `claude-sonnet-5`. Cost controls in place: dedup before any call,
+a rule-based gate, cheap-model triage, a **permanent content-hash cache** so identical text is
+never analysed twice, per-call token logging, and a hard `LLM_DAILY_CALL_BUDGET`. Current spend is
+visible at `/api/admin/data-quality`. Verify rates at <https://claude.com/pricing> — the estimates
+above are from published prices at time of writing.
+
+---
+
+## Known limitations
+
+These are real and they do not have workarounds:
+
+1. **Truth Social has no legitimate feed.** The fastest-possible-reaction use case is not
+   achievable through permitted means. News RSS covers most market-relevant posts indirectly,
+   1–15 minutes later, attributed to the publication rather than the post.
+2. **Free market data is daily-only.** Intraday horizons are implemented but stay off unless you
+   pay for a provider that supplies intraday history.
+3. **Small samples.** A specific company rarely has 20+ comparable past events. Most signals will
+   honestly say "unreliable", and the score gives those statistics zero weight.
+4. **Events are not independent.** Comparable events cluster in time and share causes, so the
+   effective sample is smaller than N suggests. The panel says so on every signal.
+5. **Regime change.** The sample spans different policy, rate and market regimes than the present.
+6. **iOS push is best-effort.** Requires Home Screen installation and a recent iOS; delivery goes
+   through APNs and can be delayed or dropped by Low Power Mode, Focus modes or connectivity. A
+   PWA on iOS **cannot poll in the background at all** — which is precisely why the worker is
+   server-side. The in-app notification centre is the system of record; push is a convenience.
+7. **Unverified endpoints.** The build environment had no outbound network access to government
+   or market sites, so no live feed URL in this repository has been confirmed against the real
+   service. Every URL is configurable and every adapter fails into the health table by design —
+   but check Settings → Sources on first deployment. See `docs/PHASE0_FEASIBILITY.md`.
+8. **LLM contamination in backtests.** A model's training data may contain knowledge of what
+   followed a historical event. When backtesting ships it will default to rule-based sentiment,
+   and any LLM-scored backtest will be labelled "potentially contaminated".
+
+---
+
+## Repository layout
+
+```
+backend/
+  app/
+    api/            FastAPI routes (feed, user, admin) + serialisers
+    llm/            Anthropic client, prompts, schema, offline canned client
+    market/         provider interface, mock + Stooq, US market calendar, returns
+    pipeline/       relevance, ticker matching, analysis, historical, signals,
+                    notifications, email, and the pipeline runner
+    seed/           mock dataset, sample archive, loader and archive importer
+    sources/        adapter interface, adapters, HTTP retry/backoff, registry
+    worker/         APScheduler worker
+    config.py  db.py  models.py  schemas.py  auth.py  main.py
+  alembic/          migrations
+  tests/            203 tests, including the end-to-end test
+  manage.py         operational CLI (seed, import, poll, pipeline, status)
+frontend/
+  src/              React + TypeScript pages, components, API client
+  public/           manifest, service worker, icons
+docs/
+  PHASE0_FEASIBILITY.md
+scripts/            archive and icon generators
+```
+
+---
+
+*Research and information tool. Not investment advice. No brokerage integration, no order
+placement, nothing autonomous.*

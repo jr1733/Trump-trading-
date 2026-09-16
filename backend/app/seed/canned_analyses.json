@@ -1,0 +1,164 @@
+[
+ {
+  "match_all": ["tariff", "apple"],
+  "analysis": {
+   "event_type": "tariff",
+   "entities": ["Apple Inc.", "consumer electronics manufacturers"],
+   "tickers": ["AAPL"],
+   "sentiment": -0.35,
+   "market_impact": -0.4,
+   "confidence": 0.62,
+   "time_horizon": "days",
+   "reasoning": "The text describes tariffs on consumer electronics as under consideration and names Apple Inc. in connection with domestic manufacturing commitments. No order has been signed and no rate or date is given.",
+   "facts": ["Tariffs on consumer electronics imports are described as under consideration."],
+   "stated_positions": ["Companies that manufacture domestically will be treated differently from those that do not.", "Existing commitments are expected to be honoured."],
+   "third_party_claims": [],
+   "speculation": ["A tariff on consumer electronics would raise input costs for firms importing finished devices."],
+   "uncertainty": ["No tariff rate, scope or effective date is stated.", "It is not stated whether existing exemptions would apply.", "The text does not say whether this is a new position or a restatement."]
+  }
+ },
+ {
+  "match_all": ["chips", "nvidia"],
+  "analysis": {
+   "event_type": "sanction",
+   "entities": ["Nvidia", "Taiwan Semiconductor"],
+   "tickers": ["NVDA", "TSM"],
+   "sentiment": -0.45,
+   "market_impact": -0.5,
+   "confidence": 0.58,
+   "time_horizon": "days",
+   "reasoning": "Export controls on advanced chips are described as under review with new restrictions under consideration for unnamed destinations. Two suppliers are named.",
+   "facts": ["Export controls on advanced semiconductors are described as under review."],
+   "stated_positions": ["Semiconductors are framed as a national security matter."],
+   "third_party_claims": [],
+   "speculation": ["Tighter export controls would reduce addressable demand for the named suppliers."],
+   "uncertainty": ["The destinations under consideration are not named.", "No timetable is given.", "The scope of 'advanced' is undefined in the text."]
+  }
+ },
+ {
+  "match_all": ["permitting", "drilling"],
+  "analysis": {
+   "event_type": "deregulation",
+   "entities": ["Exxon", "energy sector"],
+   "tickers": ["XOM", "XLE"],
+   "sentiment": 0.5,
+   "market_impact": 0.42,
+   "confidence": 0.66,
+   "time_horizon": "days",
+   "reasoning": "An executive order directing agencies to accelerate permitting is described as signed, which is a completed action rather than a proposal.",
+   "facts": ["An executive order directing faster permitting for drilling and pipeline projects is described as signed."],
+   "stated_positions": ["Regulation is characterised as having held the sector back."],
+   "third_party_claims": [],
+   "speculation": ["Faster permitting could shorten project timelines for pending applications."],
+   "uncertainty": ["The agencies covered and the deadlines imposed are not stated.", "Litigation risk to the order is not addressed in the text."]
+  }
+ },
+ {
+  "match_all": ["imported vehicles"],
+  "analysis": {
+   "event_type": "tariff",
+   "entities": ["General Motors", "Ford Motor"],
+   "tickers": ["GM", "F"],
+   "sentiment": -0.2,
+   "market_impact": -0.25,
+   "confidence": 0.55,
+   "time_horizon": "weeks",
+   "reasoning": "A tariff on imported vehicles and parts is described as under review with a decision expected in weeks. Two domestic manufacturers are named favourably.",
+   "facts": ["A tariff on imported vehicles and parts is described as under review.", "A decision is described as expected within weeks."],
+   "stated_positions": ["Domestic assembly is framed positively."],
+   "third_party_claims": [],
+   "speculation": ["Parts tariffs could raise costs even for manufacturers assembling domestically."],
+   "uncertainty": ["Whether parts as well as finished vehicles are covered is ambiguous.", "No rate is given."]
+  }
+ },
+ {
+  "match_all": ["lockheed"],
+  "analysis": {
+   "event_type": "defense",
+   "entities": ["Lockheed Martin", "Raytheon"],
+   "tickers": ["LMT", "RTX"],
+   "sentiment": 0.55,
+   "market_impact": 0.35,
+   "confidence": 0.7,
+   "time_horizon": "days",
+   "reasoning": "A contract award is described as made, naming a prime contractor and a component supplier under a separate agreement.",
+   "facts": ["A defense contract for missile systems is described as awarded.", "Lockheed Martin is named as prime contractor.", "Raytheon is named as supplying components under a separate agreement."],
+   "stated_positions": [],
+   "third_party_claims": [],
+   "speculation": ["Contract awards of this kind typically carry multi-year revenue."],
+   "uncertainty": ["No contract value or duration is stated.", "Whether the award is new or an extension is not stated."]
+  }
+ },
+ {
+  "match_all": ["antitrust"],
+  "analysis": {
+   "event_type": "regulation",
+   "entities": ["Google", "Meta Platforms"],
+   "tickers": ["GOOGL", "META"],
+   "sentiment": -0.5,
+   "market_impact": -0.3,
+   "confidence": 0.5,
+   "time_horizon": "weeks",
+   "reasoning": "An antitrust review is described as under consideration, with two platforms named. No agency, case or timetable is identified.",
+   "facts": ["An antitrust review is described as under consideration."],
+   "stated_positions": ["Large platforms are characterised as having excessive control over distribution."],
+   "third_party_claims": [],
+   "speculation": ["A formal review would introduce a multi-year legal overhang."],
+   "uncertainty": ["No agency is named.", "No specific conduct is alleged in the text.", "'Under consideration' may not lead to any action."]
+  }
+ },
+ {
+  "match_all": ["corporate tax"],
+  "analysis": {
+   "event_type": "fiscal_policy",
+   "entities": ["domestic manufacturers"],
+   "tickers": ["SPY", "XLI"],
+   "sentiment": 0.6,
+   "market_impact": 0.45,
+   "confidence": 0.5,
+   "time_horizon": "weeks",
+   "reasoning": "A corporate tax cut conditioned on domestic manufacturing is stated as a goal. It is a stated intention, not enacted law.",
+   "facts": [],
+   "stated_positions": ["A corporate tax cut for domestic manufacturers is desired.", "Lower taxes are asserted to increase investment."],
+   "third_party_claims": [],
+   "speculation": ["A rate cut would mechanically raise post-tax earnings for affected firms."],
+   "uncertainty": ["No rate, mechanism or legislative vehicle is stated.", "Any change would require Congress, which the text does not address."]
+  }
+ },
+ {
+  "match_all": ["drug companies"],
+  "analysis": {
+   "event_type": "regulation",
+   "entities": ["pharmaceutical companies"],
+   "tickers": ["XLV"],
+   "sentiment": -0.45,
+   "market_impact": -0.35,
+   "confidence": 0.52,
+   "time_horizon": "weeks",
+   "reasoning": "A review of drug pricing rules is described as under way, with an assertion about international price differences.",
+   "facts": ["A review of drug pricing rules is described as under way."],
+   "stated_positions": ["US prices are asserted to exceed those charged elsewhere."],
+   "third_party_claims": [],
+   "speculation": ["Pricing rules could compress margins for affected manufacturers."],
+   "uncertainty": ["No mechanism, drug class or timetable is stated.", "The comparison to other countries is asserted, not evidenced, in the text."]
+  }
+ },
+ {
+  "match_all": ["sanctions", "crude"],
+  "analysis": {
+   "event_type": "sanction",
+   "entities": ["Chevron", "energy sector"],
+   "tickers": ["CVX", "XLE"],
+   "sentiment": -0.3,
+   "market_impact": 0.15,
+   "confidence": 0.48,
+   "time_horizon": "days",
+   "reasoning": "Sanctions covering crude exports are described as announced, with licences under review. Supply restrictions cut against the named company but can support crude prices, so the sentiment and impact signs differ here.",
+   "facts": ["Sanctions covering crude oil exports from an unnamed region are described as announced.", "Chevron licences are described as under review."],
+   "stated_positions": [],
+   "third_party_claims": [],
+   "speculation": ["Removing supply can raise benchmark crude prices even as it reduces volumes for licence holders."],
+   "uncertainty": ["The region is not named in the text.", "Whether licences will be revoked or renewed is not stated."]
+  }
+ }
+]

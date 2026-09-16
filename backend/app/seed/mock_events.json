@@ -1,0 +1,102 @@
+[
+  {
+    "external_id": "mock-0001",
+    "title": "Statement on consumer electronics tariffs",
+    "text": "We are looking very seriously at tariffs on consumer electronics coming in from overseas. Apple Inc. has made commitments about building here, and we expect those commitments to be honoured. Companies that build in America will be treated very differently from companies that do not.",
+    "author": "Donald J. Trump",
+    "url": "https://example.invalid/mock/0001",
+    "offset_minutes": 25,
+    "note": "Synthetic. Should match a tariff/AAPL watchlist rule."
+  },
+  {
+    "external_id": "mock-0002",
+    "title": "Remarks on semiconductor supply",
+    "text": "Chips are national security. Nvidia and Taiwan Semiconductor need to understand that export controls on advanced chips are being reviewed, and new restrictions are under consideration for certain destinations.",
+    "author": "Donald J. Trump",
+    "url": "https://example.invalid/mock/0002",
+    "offset_minutes": 70
+  },
+  {
+    "external_id": "mock-0003",
+    "title": "Energy permitting order signed",
+    "text": "Signed an executive order directing agencies to speed up permitting for drilling and pipeline projects. The energy sector has been held back by regulation for too long. Exxon and others have applications waiting.",
+    "author": "The White House",
+    "url": "https://example.invalid/mock/0003",
+    "offset_minutes": 150
+  },
+  {
+    "external_id": "mock-0004",
+    "title": "Comments on imported vehicles",
+    "text": "Imported cars are being looked at closely. General Motors and Ford Motor build here, and that matters. A tariff on imported vehicles and parts is under review, with a decision expected in the coming weeks.",
+    "author": "Donald J. Trump",
+    "url": "https://example.invalid/mock/0004",
+    "offset_minutes": 220
+  },
+  {
+    "external_id": "mock-0005",
+    "title": "Defense procurement statement",
+    "text": "A new defense contract for missile systems has been awarded. Lockheed Martin will be the prime contractor. Raytheon will supply components under a separate agreement.",
+    "author": "The White House",
+    "url": "https://example.invalid/mock/0005",
+    "offset_minutes": 310
+  },
+  {
+    "external_id": "mock-0006",
+    "title": "Remarks on platform regulation",
+    "text": "The big tech platforms need much stronger oversight. Google and Meta Platforms have too much control over what people see. An antitrust review is being considered.",
+    "author": "Donald J. Trump",
+    "url": "https://example.invalid/mock/0006",
+    "offset_minutes": 420
+  },
+  {
+    "external_id": "mock-0007",
+    "title": "Statement on corporate taxation",
+    "text": "We want a corporate tax cut for companies that manufacture in the United States. Lower taxes mean more investment and more plants being built here.",
+    "author": "Donald J. Trump",
+    "url": "https://example.invalid/mock/0007",
+    "offset_minutes": 500
+  },
+  {
+    "external_id": "mock-0008",
+    "title": "An apple a day",
+    "text": "Had a wonderful lunch today. They served an apple pie that was, honestly, the best anyone has ever had. Tremendous people, tremendous kitchen.",
+    "author": "Donald J. Trump",
+    "url": "https://example.invalid/mock/0008",
+    "offset_minutes": 560,
+    "note": "Synthetic. 'apple' here is generic: should match AAPL at LOW confidence at most, and should not pass the relevance filter."
+  },
+  {
+    "external_id": "mock-0009",
+    "title": "Sanctions package announced",
+    "text": "New sanctions were announced covering crude oil exports from the region. Chevron licences are being reviewed as part of the package, and the energy sector should expect further announcements.",
+    "author": "The White House",
+    "url": "https://example.invalid/mock/0009",
+    "offset_minutes": 640
+  },
+  {
+    "external_id": "mock-0010",
+    "title": "Statement on consumer electronics tariffs",
+    "text": "We are looking very seriously at tariffs on consumer electronics coming in from overseas. Apple Inc. has made commitments about building here, and we expect those commitments to be honoured. Companies that build in America will be treated very differently from companies that do not.",
+    "author": "Donald J. Trump",
+    "url": "https://example.invalid/mock/0001",
+    "offset_minutes": 24,
+    "note": "Synthetic. Deliberate republish of mock-0001 with a different external id: exercises content-hash deduplication."
+  },
+  {
+    "external_id": "mock-0011",
+    "title": "Golf tournament remarks",
+    "text": "Played a great round today at the club. Beautiful weather, wonderful people, and the course has never looked better.",
+    "author": "Donald J. Trump",
+    "url": "https://example.invalid/mock/0011",
+    "offset_minutes": 700,
+    "note": "Synthetic. No economic content: should be filtered out before any model call."
+  },
+  {
+    "external_id": "mock-0012",
+    "title": "Statement on drug pricing",
+    "text": "Drug companies are charging Americans far more than they charge other countries. We are reviewing rules to bring those prices down, and pharmaceutical companies should expect action.",
+    "author": "The White House",
+    "url": "https://example.invalid/mock/0012",
+    "offset_minutes": 780
+  }
+]

@@ -1,0 +1,58 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html {
+    -webkit-text-size-adjust: 100%;
+  }
+
+  body {
+    @apply bg-bg text-gray-200 antialiased;
+    /* Stops iOS Safari bouncing the whole page behind the fixed bottom nav. */
+    overscroll-behavior-y: none;
+  }
+
+  /* Light mode is opt-in via the `light` class on <html>; the app ships dark. */
+  html.light body {
+    @apply bg-gray-50 text-gray-900;
+  }
+}
+
+@layer components {
+  .card {
+    @apply rounded-xl border border-edge bg-panel p-4;
+  }
+
+  .chip {
+    @apply inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-medium;
+  }
+
+  .btn {
+    @apply rounded-lg border border-edge bg-panel px-3 py-2 text-sm font-medium
+           active:scale-[0.98] disabled:opacity-50;
+  }
+
+  .btn-primary {
+    @apply rounded-lg bg-accent px-3 py-2 text-sm font-semibold text-white
+           active:scale-[0.98] disabled:opacity-50;
+  }
+
+  .input {
+    @apply w-full rounded-lg border border-edge bg-bg px-3 py-2 text-base
+           text-gray-100 placeholder:text-muted focus:border-accent focus:outline-none;
+  }
+
+  .label {
+    @apply mb-1 block text-xs font-medium uppercase tracking-wide text-muted;
+  }
+
+  /* Keeps content clear of the notch and the home indicator. */
+  .safe-top {
+    padding-top: env(safe-area-inset-top);
+  }
+
+  .safe-bottom {
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+}

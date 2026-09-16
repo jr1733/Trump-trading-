@@ -1,0 +1,48 @@
+[
+  {"alias": "Apple Inc.", "ticker": "AAPL", "confidence": "HIGH", "ambiguous": false, "entity": "Apple Inc."},
+  {"alias": "apple", "ticker": "AAPL", "confidence": "MEDIUM", "ambiguous": true, "entity": "Apple Inc."},
+  {"alias": "iphone", "ticker": "AAPL", "confidence": "MEDIUM", "ambiguous": false, "entity": "Apple Inc."},
+  {"alias": "tim cook", "ticker": "AAPL", "confidence": "HIGH", "ambiguous": false, "entity": "Apple Inc."},
+
+  {"alias": "Microsoft", "ticker": "MSFT", "confidence": "HIGH", "ambiguous": false, "entity": "Microsoft Corporation"},
+  {"alias": "Nvidia", "ticker": "NVDA", "confidence": "HIGH", "ambiguous": false, "entity": "NVIDIA Corporation"},
+  {"alias": "Taiwan Semiconductor", "ticker": "TSM", "confidence": "HIGH", "ambiguous": false, "entity": "Taiwan Semiconductor Manufacturing"},
+  {"alias": "TSMC", "ticker": "TSM", "confidence": "HIGH", "ambiguous": false, "entity": "Taiwan Semiconductor Manufacturing"},
+  {"alias": "Intel", "ticker": "INTC", "confidence": "HIGH", "ambiguous": false, "entity": "Intel Corporation"},
+  {"alias": "Micron", "ticker": "MU", "confidence": "HIGH", "ambiguous": false, "entity": "Micron Technology"},
+  {"alias": "Meta Platforms", "ticker": "META", "confidence": "HIGH", "ambiguous": false, "entity": "Meta Platforms"},
+  {"alias": "Facebook", "ticker": "META", "confidence": "MEDIUM", "ambiguous": false, "entity": "Meta Platforms"},
+  {"alias": "Alphabet", "ticker": "GOOGL", "confidence": "HIGH", "ambiguous": false, "entity": "Alphabet Inc."},
+  {"alias": "Google", "ticker": "GOOGL", "confidence": "HIGH", "ambiguous": false, "entity": "Alphabet Inc."},
+  {"alias": "Amazon", "ticker": "AMZN", "confidence": "HIGH", "ambiguous": false, "entity": "Amazon.com Inc."},
+
+  {"alias": "Tesla", "ticker": "TSLA", "confidence": "HIGH", "ambiguous": false, "entity": "Tesla Inc."},
+  {"alias": "Elon Musk", "ticker": "TSLA", "confidence": "MEDIUM", "ambiguous": false, "entity": "Tesla Inc."},
+  {"alias": "Ford Motor", "ticker": "F", "confidence": "HIGH", "ambiguous": false, "entity": "Ford Motor Company"},
+  {"alias": "ford", "ticker": "F", "confidence": "MEDIUM", "ambiguous": true, "entity": "Ford Motor Company"},
+  {"alias": "General Motors", "ticker": "GM", "confidence": "HIGH", "ambiguous": false, "entity": "General Motors Company"},
+  {"alias": "Stellantis", "ticker": "STLA", "confidence": "HIGH", "ambiguous": false, "entity": "Stellantis N.V."},
+  {"alias": "Toyota", "ticker": "TM", "confidence": "HIGH", "ambiguous": false, "entity": "Toyota Motor Corporation"},
+
+  {"alias": "Boeing", "ticker": "BA", "confidence": "HIGH", "ambiguous": false, "entity": "The Boeing Company"},
+  {"alias": "Caterpillar", "ticker": "CAT", "confidence": "HIGH", "ambiguous": false, "entity": "Caterpillar Inc."},
+  {"alias": "John Deere", "ticker": "DE", "confidence": "HIGH", "ambiguous": false, "entity": "Deere & Company"},
+  {"alias": "Lockheed Martin", "ticker": "LMT", "confidence": "HIGH", "ambiguous": false, "entity": "Lockheed Martin Corporation"},
+  {"alias": "Lockheed", "ticker": "LMT", "confidence": "HIGH", "ambiguous": false, "entity": "Lockheed Martin Corporation"},
+  {"alias": "Raytheon", "ticker": "RTX", "confidence": "HIGH", "ambiguous": false, "entity": "RTX Corporation"},
+
+  {"alias": "JPMorgan", "ticker": "JPM", "confidence": "HIGH", "ambiguous": false, "entity": "JPMorgan Chase & Co."},
+  {"alias": "Exxon", "ticker": "XOM", "confidence": "HIGH", "ambiguous": false, "entity": "Exxon Mobil Corporation"},
+  {"alias": "Chevron", "ticker": "CVX", "confidence": "HIGH", "ambiguous": false, "entity": "Chevron Corporation"},
+  {"alias": "Trump Media", "ticker": "DJT", "confidence": "HIGH", "ambiguous": false, "entity": "Trump Media & Technology Group"},
+
+  {"alias": "semiconductor industry", "ticker": "XLK", "confidence": "MEDIUM", "ambiguous": false, "entity": "Technology sector"},
+  {"alias": "tech industry", "ticker": "XLK", "confidence": "MEDIUM", "ambiguous": false, "entity": "Technology sector"},
+  {"alias": "oil industry", "ticker": "XLE", "confidence": "MEDIUM", "ambiguous": false, "entity": "Energy sector"},
+  {"alias": "energy sector", "ticker": "XLE", "confidence": "MEDIUM", "ambiguous": false, "entity": "Energy sector"},
+  {"alias": "banks", "ticker": "XLF", "confidence": "LOW", "ambiguous": true, "entity": "Financials sector"},
+  {"alias": "defense industry", "ticker": "XLI", "confidence": "MEDIUM", "ambiguous": false, "entity": "Industrials sector"},
+  {"alias": "manufacturing", "ticker": "XLI", "confidence": "LOW", "ambiguous": true, "entity": "Industrials sector"},
+  {"alias": "drug companies", "ticker": "XLV", "confidence": "MEDIUM", "ambiguous": false, "entity": "Health Care sector"},
+  {"alias": "pharmaceutical companies", "ticker": "XLV", "confidence": "MEDIUM", "ambiguous": false, "entity": "Health Care sector"}
+]

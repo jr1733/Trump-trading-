@@ -1,0 +1,39 @@
+[
+  {"symbol": "SPY", "name": "SPDR S&P 500 ETF Trust", "asset_class": "etf", "sector": "Broad market", "sector_etf": null},
+  {"symbol": "QQQ", "name": "Invesco QQQ Trust", "asset_class": "etf", "sector": "Technology", "sector_etf": "XLK"},
+  {"symbol": "VIX", "name": "CBOE Volatility Index", "asset_class": "index", "sector": null, "sector_etf": null},
+  {"symbol": "TNX", "name": "US 10-Year Treasury Yield", "asset_class": "rate", "sector": null, "sector_etf": null},
+
+  {"symbol": "XLK", "name": "Technology Select Sector SPDR", "asset_class": "etf", "sector": "Technology", "sector_etf": null},
+  {"symbol": "XLE", "name": "Energy Select Sector SPDR", "asset_class": "etf", "sector": "Energy", "sector_etf": null},
+  {"symbol": "XLF", "name": "Financial Select Sector SPDR", "asset_class": "etf", "sector": "Financials", "sector_etf": null},
+  {"symbol": "XLI", "name": "Industrial Select Sector SPDR", "asset_class": "etf", "sector": "Industrials", "sector_etf": null},
+  {"symbol": "XLV", "name": "Health Care Select Sector SPDR", "asset_class": "etf", "sector": "Health Care", "sector_etf": null},
+
+  {"symbol": "AAPL", "name": "Apple Inc.", "asset_class": "equity", "sector": "Technology", "sector_etf": "XLK"},
+  {"symbol": "MSFT", "name": "Microsoft Corporation", "asset_class": "equity", "sector": "Technology", "sector_etf": "XLK"},
+  {"symbol": "NVDA", "name": "NVIDIA Corporation", "asset_class": "equity", "sector": "Technology", "sector_etf": "XLK"},
+  {"symbol": "TSM", "name": "Taiwan Semiconductor Manufacturing", "asset_class": "equity", "sector": "Technology", "sector_etf": "XLK"},
+  {"symbol": "INTC", "name": "Intel Corporation", "asset_class": "equity", "sector": "Technology", "sector_etf": "XLK"},
+  {"symbol": "MU", "name": "Micron Technology", "asset_class": "equity", "sector": "Technology", "sector_etf": "XLK"},
+  {"symbol": "META", "name": "Meta Platforms", "asset_class": "equity", "sector": "Technology", "sector_etf": "XLK"},
+  {"symbol": "GOOGL", "name": "Alphabet Inc.", "asset_class": "equity", "sector": "Technology", "sector_etf": "XLK"},
+  {"symbol": "AMZN", "name": "Amazon.com Inc.", "asset_class": "equity", "sector": "Consumer Discretionary", "sector_etf": "XLK"},
+
+  {"symbol": "TSLA", "name": "Tesla Inc.", "asset_class": "equity", "sector": "Consumer Discretionary", "sector_etf": "XLI"},
+  {"symbol": "F", "name": "Ford Motor Company", "asset_class": "equity", "sector": "Consumer Discretionary", "sector_etf": "XLI"},
+  {"symbol": "GM", "name": "General Motors Company", "asset_class": "equity", "sector": "Consumer Discretionary", "sector_etf": "XLI"},
+  {"symbol": "STLA", "name": "Stellantis N.V.", "asset_class": "equity", "sector": "Consumer Discretionary", "sector_etf": "XLI"},
+  {"symbol": "TM", "name": "Toyota Motor Corporation", "asset_class": "equity", "sector": "Consumer Discretionary", "sector_etf": "XLI"},
+
+  {"symbol": "BA", "name": "The Boeing Company", "asset_class": "equity", "sector": "Industrials", "sector_etf": "XLI"},
+  {"symbol": "CAT", "name": "Caterpillar Inc.", "asset_class": "equity", "sector": "Industrials", "sector_etf": "XLI"},
+  {"symbol": "DE", "name": "Deere & Company", "asset_class": "equity", "sector": "Industrials", "sector_etf": "XLI"},
+  {"symbol": "LMT", "name": "Lockheed Martin Corporation", "asset_class": "equity", "sector": "Industrials", "sector_etf": "XLI"},
+  {"symbol": "RTX", "name": "RTX Corporation", "asset_class": "equity", "sector": "Industrials", "sector_etf": "XLI"},
+
+  {"symbol": "JPM", "name": "JPMorgan Chase & Co.", "asset_class": "equity", "sector": "Financials", "sector_etf": "XLF"},
+  {"symbol": "XOM", "name": "Exxon Mobil Corporation", "asset_class": "equity", "sector": "Energy", "sector_etf": "XLE"},
+  {"symbol": "CVX", "name": "Chevron Corporation", "asset_class": "equity", "sector": "Energy", "sector_etf": "XLE"},
+  {"symbol": "DJT", "name": "Trump Media & Technology Group", "asset_class": "equity", "sector": "Communication Services", "sector_etf": "XLK"}
+]

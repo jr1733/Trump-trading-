@@ -1,0 +1,13 @@
+# Runtime dependencies. Pinned to majors/minors known good at 2026-09.
+fastapi==0.141.1
+uvicorn[standard]==0.34.3
+sqlalchemy==2.0.54
+alembic==1.20.0
+psycopg[binary]==3.3.5
+pydantic==2.13.5
+pydantic-settings==2.7.1
+python-dateutil==2.9.0.post0
+httpx==0.28.1
+feedparser==6.0.14
+APScheduler==3.11.3
+anthropic==1.6.0

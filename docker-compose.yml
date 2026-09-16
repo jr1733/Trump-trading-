@@ -1,0 +1,75 @@
+# One command brings up the whole system with mock data and no API keys:
+#
+#     cp .env.example .env && docker compose up --build
+#
+# Then open http://localhost:8080 and sign in with APP_AUTH_TOKEN.
+
+services:
+  db:
+    # pgvector image rather than plain postgres: Phase 1 does not need the
+    # extension, but Phase 2 does, and swapping the image later would mean a
+    # data migration.
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: trumpmarket
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d trumpmarket"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  # Runs migrations once, then exits. Both app containers wait for it.
+  migrate:
+    build: ./backend
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+psycopg://postgres:postgres@db:5432/trumpmarket
+    command: sh -c "alembic upgrade head && python manage.py seed"
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: "no"
+
+  api:
+    build: ./backend
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+psycopg://postgres:postgres@db:5432/trumpmarket
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health')\""]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # The polling worker. This is why the hosting recommendation is an always-on
+  # VPS rather than a scale-to-zero tier: if this sleeps, nothing is monitored.
+  worker:
+    build: ./backend
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+psycopg://postgres:postgres@db:5432/trumpmarket
+    command: python -m app.worker.scheduler
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  web:
+    build: ./frontend
+    ports:
+      - "8080:80"
+    depends_on:
+      - api
+    restart: unless-stopped
+
+volumes:
+  pgdata:
