@@ -41,7 +41,7 @@ from ..models import (
     utcnow,
 )
 from . import analysis as analysis_mod
-from . import historical, notifications, relevance, signals, ticker_match
+from . import historical, notifications, relevance, shadow, signals, ticker_match
 from .push import build_push_provider
 
 log = logging.getLogger(__name__)
@@ -54,6 +54,7 @@ class PipelineReport:
     events_duplicate: int = 0
     events_irrelevant: int = 0
     analyses_run: int = 0
+    shadow_analyses_run: int = 0
     signals_written: int = 0
     notifications_created: int = 0
     errors: list[str] = field(default_factory=list)
@@ -65,6 +66,7 @@ class PipelineReport:
             "events_duplicate": self.events_duplicate,
             "events_irrelevant": self.events_irrelevant,
             "analyses_run": self.analyses_run,
+            "shadow_analyses_run": self.shadow_analyses_run,
             "signals_written": self.signals_written,
             "notifications_created": self.notifications_created,
             "errors": self.errors,
@@ -307,6 +309,13 @@ def process_raw_event(
         report.analyses_run += 1
         if row.parsed:
             claude_tickers = list(row.parsed.get("tickers") or [])
+        # Comparison only. Writes to `shadow_analyses`, which nothing that
+        # builds a signal or an alert reads, and a failure here is swallowed.
+        try:
+            if shadow.run_shadow_analysis(db, event) is not None:
+                report.shadow_analyses_run += 1
+        except Exception as exc:  # pragma: no cover - defensive
+            log.warning("shadow analysis skipped for %s: %s", event.id, exc)
     elif event.analysis and event.analysis.parsed:
         claude_tickers = list(event.analysis.parsed.get("tickers") or [])
 

@@ -52,12 +52,33 @@ def record_usage(db: Session, *, purpose: str, event_id: str | None, outcome: LL
     db.flush()
 
 
-def cached_analysis(db: Session, content_hash: str) -> ClaudeAnalysis | None:
-    return (
-        db.execute(select(ClaudeAnalysis).where(ClaudeAnalysis.content_hash == content_hash))
-        .scalars()
-        .first()
+def current_mode() -> str:
+    """"fake" when the canned offline scorer is in use, otherwise "live"."""
+    return "fake" if settings.llm_fake_mode else "live"
+
+
+def cached_analysis(
+    db: Session,
+    content_hash: str,
+    *,
+    model: str | None = None,
+    mode: str | None = None,
+) -> ClaudeAnalysis | None:
+    """The cached analysis for this text **under the current model and mode**.
+
+    Keying on content hash alone was a real bug, not a simplification. The first
+    COMPLETE row won forever, so an event analysed during an `LLM_FAKE_MODE`
+    week kept its canned placeholder after real analysis was turned on --
+    silently, with no error, no cost, and nothing in the UI to notice. The same
+    applies to switching models: a cheaper model's reading must not be inherited
+    by the expensive one or vice versa.
+    """
+    stmt = select(ClaudeAnalysis).where(
+        ClaudeAnalysis.content_hash == content_hash,
+        ClaudeAnalysis.model == (model or settings.anthropic_analysis_model),
+        ClaudeAnalysis.mode == (mode or current_mode()),
     )
+    return db.execute(stmt).scalars().first()
 
 
 def analyse_event(
@@ -156,18 +177,31 @@ def _store_outcome(
     status_override: str | None = None,
 ) -> ClaudeAnalysis:
     parsed = outcome.parsed or None
-    existing = (
-        db.execute(select(ClaudeAnalysis).where(ClaudeAnalysis.event_id == event.id))
-        .scalars()
-        .first()
-    )
-    row = existing or cached_analysis(db, event.content_hash)
+    mode = current_mode()
+    # Row identity is (content_hash, model, mode) -- the same key the cache uses,
+    # so storing never collides with the unique constraint.
+    row = cached_analysis(db, event.content_hash, model=outcome.model, mode=mode)
 
     if row is None:
-        row = ClaudeAnalysis(event_id=event.id, content_hash=event.content_hash)
+        row = ClaudeAnalysis(
+            event_id=event.id, content_hash=event.content_hash, model=outcome.model, mode=mode
+        )
         db.add(row)
 
+    # `event.analysis` is a one-to-one relationship, so exactly one row may be
+    # attached to this event. When a re-analysis under a new model or mode
+    # produces a different row, detach the old one -- it stays as a cache entry
+    # under its own key, but it is no longer this event's analysis.
+    for previous in db.execute(
+        select(ClaudeAnalysis).where(
+            ClaudeAnalysis.event_id == event.id, ClaudeAnalysis.id != row.id
+        )
+    ).scalars():
+        previous.event_id = None
+    row.event_id = event.id
+
     row.model = outcome.model
+    row.mode = mode
     row.status = outcome.status
     row.raw_response = outcome.raw_response
     row.parsed = parsed

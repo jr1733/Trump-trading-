@@ -183,6 +183,8 @@ export interface AppConfig {
   signal_return_scale: number;
   sample_size_gates: { unreliable_below: number; limited_below: number };
   primary_horizon: string;
+  deployed_at: string | null;
+  shadow_model: string | null;
   phase: number;
 }
 

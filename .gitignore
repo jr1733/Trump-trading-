@@ -24,3 +24,6 @@ dist/
 
 # Local scratch
 frontend/shot.mjs
+
+# Database backups -- never commit these.
+backups/

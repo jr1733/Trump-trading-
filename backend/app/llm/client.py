@@ -42,11 +42,44 @@ MODEL_PRICING: dict[str, tuple[float, float]] = {
 }
 _DEFAULT_PRICING = (5.0, 25.0)
 
+#: Models that accept `output_config.effort`. An ALLOWLIST rather than a
+#: denylist, because the failure modes are not symmetric: guessing that an
+#: unknown model supports effort costs a 400 on every analysis call, while
+#: guessing it does not costs only the effort setting. Haiku 4.5 rejects effort
+#: outright -- which matters here because Haiku is the cheapest-configuration
+#: default, so the obvious cost-saving change would otherwise break every call.
+_EFFORT_SUPPORTED_PREFIXES = (
+    "claude-opus-5",
+    "claude-opus-4-8",
+    "claude-opus-4-7",
+    "claude-opus-4-6",
+    "claude-opus-4-5",
+    "claude-sonnet-5",
+    "claude-fable-5",
+)
+
+
+def _normalise_model(model: str) -> str:
+    """Strip a dated snapshot suffix: claude-haiku-4-5-20251001 -> claude-haiku-4-5.
+
+    Both the dated and undated forms are valid model IDs. Without this the
+    pricing table misses every dated ID and silently falls back to the Opus
+    rate, overstating a Haiku bill by 5x on the cost page -- which is exactly
+    the number you would be looking at to decide whether Haiku was worth it.
+    """
+    return re.sub(r"-\d{8}$", "", (model or "").strip())
+
+
+def supports_effort(model: str) -> bool:
+    return _normalise_model(model).startswith(_EFFORT_SUPPORTED_PREFIXES)
+
 _FENCE = re.compile(r"^```(?:json)?\s*|\s*```$", re.MULTILINE)
 
 
 def estimate_cost(model: str, input_tokens: int, output_tokens: int) -> float:
-    price_in, price_out = MODEL_PRICING.get(model, _DEFAULT_PRICING)
+    price_in, price_out = MODEL_PRICING.get(
+        _normalise_model(model), _DEFAULT_PRICING
+    )
     return (input_tokens * price_in + output_tokens * price_out) / 1_000_000
 
 
@@ -130,15 +163,38 @@ class AnthropicClient:
             "messages": [{"role": "user", "content": user}],
         }
         output_config: dict[str, Any] = {}
-        if effort:
+        # Effort is model-gated. Haiku 4.5 rejects it outright, and Haiku is the
+        # cheapest-configuration default, so sending it unconditionally would
+        # mean every analysis call 400s the moment someone follows the cost
+        # advice in the README.
+        if effort and supports_effort(model):
             output_config["effort"] = effort
+        elif effort:
+            log.debug("model %s does not accept effort; omitting it", model)
         if self._supports_output_config:
             output_config["format"] = {"type": "json_schema", "schema": json_schema}
         if output_config:
             kwargs["output_config"] = output_config
 
+        def _send() -> Any:
+            return self._client.messages.create(**kwargs)
+
+        def _drop_effort() -> bool:
+            """Remove effort but keep the JSON schema. Returns whether anything
+            changed -- losing structured output because of an effort complaint
+            would trade a tuning knob for the guarantee the parser relies on."""
+            config = kwargs.get("output_config") or {}
+            if "effort" not in config:
+                return False
+            config.pop("effort")
+            if config:
+                kwargs["output_config"] = config
+            else:
+                kwargs.pop("output_config", None)
+            return True
+
         try:
-            response = self._client.messages.create(**kwargs)
+            response = _send()
         except TypeError as exc:
             # An SDK too old to know `output_config`: drop it and never try again.
             if "output_config" not in str(exc) or not self._supports_output_config:
@@ -146,14 +202,21 @@ class AnthropicClient:
             log.warning("SDK rejected output_config; falling back to prompt-only JSON")
             self._supports_output_config = False
             kwargs.pop("output_config", None)
-            response = self._client.messages.create(**kwargs)
+            response = _send()
         except Exception as exc:
             message = str(exc)
-            if self._supports_output_config and "output_config" in message:
+            if "effort" in message and _drop_effort():
+                log.warning(
+                    "model %s rejected effort (%s); retrying with the schema intact",
+                    model,
+                    message[:120],
+                )
+                response = _send()
+            elif self._supports_output_config and "output_config" in message:
                 log.warning("API rejected output_config (%s); retrying without it", message[:120])
                 self._supports_output_config = False
                 kwargs.pop("output_config", None)
-                response = self._client.messages.create(**kwargs)
+                response = _send()
             else:
                 raise
 
@@ -210,8 +273,11 @@ class AnthropicClient:
         timestamp: str,
         title: str | None,
         text: str,
+        model: str | None = None,
     ) -> LLMOutcome:
-        model = settings.anthropic_analysis_model
+        # `model` is an override for the shadow comparison run. Everything else
+        # uses the configured analysis model.
+        model = model or settings.anthropic_analysis_model
         if not self.available:
             return LLMOutcome(status="UNAVAILABLE", error="no Anthropic API key", model=model)
 

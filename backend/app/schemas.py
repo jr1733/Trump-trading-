@@ -200,10 +200,13 @@ class BacktestIn(BaseModel):
     holding_days: int = Field(default=5, ge=1, le=60)
     sentiment_mode: Literal["rule_based", "llm"] = "rule_based"
     include_low_confidence: bool = False
-    #: Keep only non-overlapping holding windows. Off by default because it can
-    #: cut N by an order of magnitude, which is a choice the reader should make
-    #: knowingly rather than discover.
-    non_overlapping_only: bool = False
+    #: Keep only non-overlapping holding windows. **Defaults to true**: the
+    #: overlapping number flatters every dispersion statistic, so the honest one
+    #: should be what you see without asking. Turn it off to see the larger,
+    #: more correlated sample.
+    non_overlapping_only: bool = True
+    #: Restrict to events after DEPLOYED_AT. Requires DEPLOYED_AT to be set.
+    forward_only: bool = False
     train_fraction: float = Field(default=0.6, gt=0.0, lt=1.0)
     validation_fraction: float = Field(default=0.2, ge=0.0, lt=1.0)
 

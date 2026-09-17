@@ -21,6 +21,8 @@ from ..config import settings
 from ..models import MarketPrice, Ticker
 from . import calendar as mcal
 from .base import Bar, MarketDataError, MarketDataProvider
+from .alphavantage_provider import AlphaVantageProvider
+from .chain import ChainedMarketDataProvider
 from .mock_provider import MockMarketDataProvider
 from .stooq_provider import StooqMarketDataProvider
 
@@ -32,14 +34,35 @@ _HORIZON_MINUTES = {"1m": 1, "5m": 5, "15m": 15, "30m": 30, "60m": 60}
 _HORIZON_DAYS = {"1d": 1, "3d": 3, "5d": 5}
 
 
-def build_provider(name: str | None = None) -> MarketDataProvider:
-    key = (name or settings.market_data_provider).lower()
+def _single_provider(key: str) -> MarketDataProvider:
     if key == "stooq":
         return StooqMarketDataProvider()
+    if key == "alphavantage":
+        return AlphaVantageProvider()
     if key == "mock":
         return MockMarketDataProvider()
     log.warning("unknown market provider %r; falling back to mock", key)
     return MockMarketDataProvider()
+
+
+def build_provider(name: str | None = None) -> MarketDataProvider:
+    """The configured provider, wrapped in a fallback chain if one is set.
+
+    `MARKET_DATA_FALLBACK_PROVIDER` is the single env var that turns the chain
+    on. It exists because every endpoint in this repository is an unverified
+    guess, which makes one provider a single point of failure for every number
+    the app computes.
+    """
+    key = (name or settings.market_data_provider).lower()
+    primary = _single_provider(key)
+
+    fallback_key = (settings.market_data_fallback_provider or "").strip().lower()
+    # An explicit provider name (the `name` argument) means "this one, exactly"
+    # -- used by verify-sources to probe each side of the chain on its own.
+    if not fallback_key or name is not None or fallback_key == key:
+        return primary
+
+    return ChainedMarketDataProvider(primary, _single_provider(fallback_key))
 
 
 @dataclass

@@ -40,10 +40,17 @@ def create_backtest(
         sentiment_mode=body.sentiment_mode,
         include_low_confidence=body.include_low_confidence,
         non_overlapping_only=body.non_overlapping_only,
+        forward_only=body.forward_only,
         splits=(body.train_fraction, body.validation_fraction, test_fraction),
     )
 
-    result = run_backtest(db, params, max_events=MAX_EVENTS)
+    try:
+        result = run_backtest(db, params, max_events=MAX_EVENTS)
+    except ValueError as exc:
+        # e.g. forward_only without DEPLOYED_AT. A configuration problem the
+        # caller can fix, so 422 with the reason -- not a 500 that reads as a
+        # bug and hides what to do about it.
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     run = store_run(db, user.id, result)
 
     payload = result.as_dict()

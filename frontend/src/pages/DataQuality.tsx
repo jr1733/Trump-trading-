@@ -54,6 +54,27 @@ interface DataQualityBody {
   }>;
 }
 
+interface ShadowBody {
+  enabled: boolean;
+  model: string | null;
+  primary_model?: string;
+  sample_rate: number;
+  compared: number;
+  shadow_rows: number;
+  mean_abs_sentiment_diff: number | null;
+  mean_abs_confidence_diff: number | null;
+  direction_disagreement_pct: number | null;
+  event_type_disagreement_pct: number | null;
+  estimated_cost_usd: number;
+  examples: Array<{
+    event_id: string | null;
+    primary_sentiment: number;
+    shadow_sentiment: number;
+    primary_event_type: string | null;
+    shadow_event_type: string | null;
+  }>;
+}
+
 interface JobsBody {
   items: Array<{
     id: string;
@@ -79,6 +100,7 @@ function Problem({ label, value, tone }: { label: string; value: number; tone?: 
 export default function DataQuality() {
   const quality = useApi<DataQualityBody>('/admin/data-quality');
   const jobs = useApi<JobsBody>('/admin/jobs?limit=15');
+  const shadow = useApi<ShadowBody>('/admin/shadow-comparison');
 
   if (quality.loading) return <Spinner label="Checking data quality" />;
   if (quality.error) return <ErrorBox message={quality.error} onRetry={quality.reload} />;
@@ -195,6 +217,83 @@ export default function DataQuality() {
               a keyword filter <em>before</em> anything is stored. Many events and few calls
               means that filter is doing its job; many calls means it is not, and the
               threshold wants raising.
+            </p>
+          </div>
+        </Section>
+      )}
+
+      {shadow.data?.enabled && (
+        <Section title="Model comparison">
+          <div className="card space-y-2">
+            <div className="flex flex-wrap items-center gap-2 text-xs">
+              <span className="chip bg-edge text-muted">
+                primary {shadow.data.primary_model ?? '—'}
+              </span>
+              <span className="chip bg-edge text-muted">shadow {shadow.data.model}</span>
+              <span className="chip bg-edge text-muted">
+                {num(shadow.data.sample_rate * 100, 0)}% sampled
+              </span>
+            </div>
+
+            {shadow.data.compared === 0 ? (
+              <p className="text-xs text-muted">
+                {shadow.data.shadow_rows} shadow analysis(es) stored, none yet paired with a
+                completed primary analysis. The comparison fills in as events are processed.
+              </p>
+            ) : (
+              <>
+                <div className="grid grid-cols-2 gap-2">
+                  <Stat label="Events compared" value={shadow.data.compared} />
+                  <Stat
+                    label="Direction disagreement"
+                    value={`${num(shadow.data.direction_disagreement_pct, 1)}%`}
+                    tone={
+                      (shadow.data.direction_disagreement_pct ?? 0) > 20
+                        ? 'text-warn'
+                        : 'text-bull'
+                    }
+                  />
+                  <Stat
+                    label="Mean |sentiment diff|"
+                    value={num(shadow.data.mean_abs_sentiment_diff, 3)}
+                  />
+                  <Stat
+                    label="Shadow cost so far"
+                    value={`$${num(shadow.data.estimated_cost_usd, 4)}`}
+                  />
+                </div>
+                <p className="text-[11px] leading-relaxed text-muted">
+                  <strong>Direction disagreement</strong> is the number that matters: two
+                  models differing by 0.1 on sentiment changes nothing, while one saying
+                  bullish and the other bearish changes the signal. A low figure here is the
+                  argument for staying on the cheaper model.
+                </p>
+                {shadow.data.examples.length > 0 && (
+                  <div className="space-y-1 text-xs">
+                    <div className="text-muted">Biggest disagreements:</div>
+                    {shadow.data.examples.map((row, index) => (
+                      <div key={`${row.event_id}-${index}`} className="flex justify-between gap-2">
+                        <span>
+                          {row.event_id ? (
+                            <Link to={`/event/${row.event_id}`} className="text-accent">
+                              view event
+                            </Link>
+                          ) : (
+                            <span className="text-muted">(no event)</span>
+                          )}
+                        </span>
+                        <span className="tabular-nums text-muted">
+                          {num(row.primary_sentiment, 2)} vs {num(row.shadow_sentiment, 2)}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </>
+            )}
+            <p className="text-[11px] text-muted">
+              Shadow results are stored in their own table and are never read by anything that
+              builds a signal, an alert or a backtest.
             </p>
           </div>
         </Section>

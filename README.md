@@ -8,7 +8,7 @@ Donald Trump, and shows **how comparable past events related to market movements
 > associations between past announcements and past price moves, from small and non-independent
 > samples. **Association is not causation, and nothing here is a forecast or a recommendation.**
 
-**Current status: Phase 3 complete.** See [Phase status](#phase-status) for exactly what works,
+**Current status: Phase 4 complete (pre-deploy hardening).** See [Phase status](#phase-status) for exactly what works,
 what is mocked, and what needs a key.
 
 ---
@@ -248,6 +248,94 @@ and the 13:00 early closes) are handled in `app/market/calendar.py` and covered 
 
 ---
 
+## The analysis cache
+
+`claude_analyses` is keyed on **(content_hash, model, mode)** — not on the content hash alone.
+
+Keying on the text alone was a real bug, not a simplification. The first COMPLETE row won forever,
+so every event analysed during an `LLM_FAKE_MODE` week kept its canned placeholder after real
+analysis was switched on — silently, with no error, no cost and nothing in the UI to notice.
+Since the deployment guide *recommends* running the first week offline, that would have poisoned
+exactly the events you most wanted analysed. `mode` is `fake` or `live`; `model` is in the key for
+the same reason, so switching models re-analyses rather than inherits.
+
+The cache still does its original job: identical text, same model, same mode, analysed twice
+costs one call. `tests/test_analysis_cache.py` covers both directions, and the regression itself
+(fake → real must re-analyse) is the first test in the file.
+
+---
+
+## Market data fallback
+
+`MARKET_DATA_FALLBACK_PROVIDER` is one env var that turns on a fallback chain. It exists because
+every endpoint in this repository is an unverified guess, which makes a single provider a single
+point of failure for every number the app computes.
+
+| Provider | Key | Bars | Notes |
+|---|---|---|---|
+| `mock` | — | daily + intraday | Synthetic. Default. |
+| `stooq` | none | daily only | Free CSV. **Unverified against the live service.** |
+| `alphavantage` | `MARKET_DATA_API_KEY` | daily only | Documented free tier. `VIX`/`TNX` resolve to **proxies** (`VIXY`, `IEF`) — `IEF` is a bond *price*, not a yield. |
+
+Alpha Vantage was chosen over the obvious alternative (the undocumented Yahoo Finance chart
+endpoint) on terms-of-service grounds — the same rule that keeps this app off Truth Social.
+
+The chain does not merge: whichever provider answers first wins the whole request. Stitching a
+series from two differently-adjusted vendors shows up as a fake overnight gap exactly where they
+change over. It also does not retry the primary within a call — the next call tries it again from
+scratch, so recovery is automatic with no circuit-breaker state to get wrong. `supports_intraday()`
+is the **AND** of the chain, not the OR, or the same event would get a 5-minute return one day and
+not the next. The provider that actually answered is written to `market_prices.provider`.
+
+`make verify-sources` probes each side **separately**, bypassing the chain, because a working
+fallback masking a broken primary is precisely the silent degradation it exists to catch.
+
+---
+
+## Forward-only evaluation
+
+`DEPLOYED_AT` is the date this deployment started collecting its own data. Set it on the day you
+deploy and never change it.
+
+Everything before it is backfilled history: the model may have been trained on it, the rule-based
+lexicon was written knowing how it turned out, and the thresholds were tuned while looking at it.
+Events after it are the only ones nothing in this system could have known about in advance — so a
+backtest restricted to them is **the only genuinely uncontaminated read this tool can ever
+produce**.
+
+The backtest page's "forward only" checkbox is disabled until `DEPLOYED_AT` is set, and the API
+returns 422 rather than silently widening the window — a contaminated result wearing a "forward
+only" label would be the worst possible outcome. A run that includes pre-deployment events carries
+a warning saying so.
+
+It is also the slowest thing here: it says nothing until months of real events have accumulated,
+and there is no way to hurry it. That is the point.
+
+---
+
+## Model comparison (shadow analyses)
+
+`SHADOW_ANALYSIS_MODEL` optionally runs a second model on a deterministic sample
+(`SHADOW_SAMPLE_RATE`, default 0.1) of analysed events, so you can find out whether the cheap
+model is good enough instead of reasoning about it. Off by default — it is a second bill, and
+unset means not one extra call.
+
+**It can never affect a signal, an alert or a backtest**, and that is structural rather than
+careful: results go to a separate `shadow_analyses` table, nothing that builds a signal imports it,
+and there is no relationship from `Event` to it, so `event.analysis` cannot resolve to a shadow row
+even by accident. A flag on `claude_analyses` would have been less code and one forgotten filter
+away from a shadow reading driving a real alert. There is a test that greps the signal-building
+modules to assert the import path does not exist.
+
+Sampling is deterministic per event (hashed event id), because a random draw would resample on
+every pipeline re-run and charge for the same backlog repeatedly.
+
+The comparison appears on `/data-quality` when enabled. **Direction disagreement** is the figure
+worth reading: two models differing by 0.1 on sentiment changes nothing, while one saying bullish
+and the other bearish changes the signal.
+
+---
+
 ## Backtesting
 
 ```
@@ -436,6 +524,124 @@ loses the digest.**
 
 ---
 
+## Network exposure
+
+**nginx is the only service that publishes a port.** Postgres, the API, the worker and the static
+frontend are reachable only on the compose network, by service name.
+
+This is not belt-and-braces with the firewall — it is the only thing protecting them. **Docker
+writes its own iptables rules in the DOCKER chain, which is consulted before the FORWARD chain ufw
+manages**, so a published container port is reachable from the internet even when `ufw status`
+says that port is denied. Binding to `127.0.0.1` would also work but is one missing prefix away
+from `0.0.0.0`, and the mistake is invisible in review.
+
+```bash
+make compose-check
+```
+
+```
+  api        internal only
+  backup     internal only
+  certbot    internal only
+  db         internal only
+  migrate    internal only
+  nginx      PUBLISHED      8080->80, 8443->443
+  web        internal only
+  worker     internal only
+
+PASS: nginx is the only published service.
+```
+
+It exits non-zero if any other service gains a `ports:` entry.
+
+---
+
+## nginx and TLS
+
+Three files in `deploy/nginx/`:
+
+| File | Role |
+|---|---|
+| `app.conf` | HTTP only. The default, used locally **and** while certbot issues the first certificate. |
+| `app-tls.conf` | Production: HTTP→HTTPS redirect plus the TLS server. |
+| `snippets/app-proxy.conf` | The routing both include, so they cannot drift apart. |
+
+`/api` goes straight to the API container (with a 300s read timeout, because a backtest
+recomputes every signal point-in-time and can legitimately run for minutes). Everything else goes
+to the `web` container, whose own nginx (`frontend/nginx.conf`) owns the static cache policy — the
+service-worker no-store rule, the manifest content type, and the immutable rule for Vite's
+fingerprinted assets. Those headers are deliberately **not** duplicated at the edge: two copies of
+a cache policy is how a stale service worker pins itself in place across a deploy.
+
+**Order matters.** nginx refuses to start if `ssl_certificate` points at a file that does not
+exist, so `app-tls.conf` cannot be running when you request the first certificate:
+
+```bash
+docker compose up -d                                   # NGINX_CONF=app.conf
+docker compose run --rm certbot certonly --webroot -w /var/www/certbot \
+  -d yourdomain.com --agree-tos -m you@example.com --no-eff-email
+sed -i 's/^NGINX_CONF=.*/NGINX_CONF=app-tls.conf/' .env
+docker compose up -d nginx
+```
+
+The ACME challenge location is matched with `^~` **before** the redirect in both files, so renewal
+keeps working once TLS is on. The `certbot` service then renews every 12 hours unattended.
+
+`${DOMAIN}` is substituted by the nginx image's envsubst at start-up (`NGINX_ENVSUBST_FILTER`
+limits it to that one variable, or it would eat nginx's own `$uri` and `$host`). `http2 on;`
+requires nginx ≥ 1.25; compose pins `nginx:1.27-alpine`.
+
+---
+
+## Backups
+
+A `backup` service dumps nightly at `BACKUP_HOUR` UTC with `BACKUP_RETENTION_DAYS` (default 7)
+days of retention. It runs the **same Postgres image as the database**, so `pg_dump` can never
+drift out of version with the server, and the host needs no Postgres client at all.
+
+Two deliberate details: the dump is written to `.partial` and renamed only on success, so an
+interrupted dump cannot be mistaken for a complete one; and retention deletes **only after a
+successful dump**, so one bad night cannot age out the backups that still work.
+
+```bash
+make backup-now                                        # dump immediately
+ls backups/
+make restore DUMP=backups/trumpmarket-20260917T094737Z.dump
+```
+
+Format is `pg_dump -Fc`: compressed, and restorable table-by-table with `pg_restore`, which is
+what you want when what you actually need back is one table.
+
+This round trip has been executed and verified — dump, purge everything, restore, row counts
+matched exactly (297 events, 25 023 prices, 8 analyses).
+
+---
+
+## Removing synthetic data
+
+`manage.py seed` loads **reference data only** — tickers, aliases, entities, the user, watchlist,
+alert rules, preferences and source rows. **No events and no prices.** docker-compose runs it on
+every start including production, so that guarantee is asserted by a test
+(`test_seed_loads_no_events_and_no_prices`) rather than left as a convention. `make demo` and
+`manage.py import-archive` are the commands that load synthetic events; never run those against
+production.
+
+If synthetic data did get in:
+
+```bash
+make purge-mock ARGS=--dry-run     # counts, deletes nothing
+make purge-mock
+```
+
+It removes events whose source is `mock` or `archive` and everything hanging off them — analyses,
+shadow analyses, signals, historical matches, embeddings, ticker links, notifications, raw rows —
+plus price bars whose provider is `mock`. Notifications are deleted explicitly rather than left to
+cascade, because `notifications.event_id` is `ON DELETE SET NULL` and they would otherwise survive
+as orphans pointing at nothing. `--all-notifications` also clears digests and system alerts, which
+have no `event_id`.
+
+---
+
 ## Deployment
 
 **Recommendation: one small always-on VPS running `docker compose`** — e.g. Hetzner CX22
@@ -553,7 +759,7 @@ Work down this list; each step rules out the one below it.
 make test            # or: cd backend && python -m pytest -q
 ```
 
-**394 tests, all passing.** They run against a real Postgres with pgvector (`trumpmarket_test`
+**481 tests, all passing.** They run against a real Postgres with pgvector (`trumpmarket_test`
 by default; override with `TEST_DATABASE_URL`) because the idempotency guarantees are enforced by
 database constraints and the similarity search is real SQL — testing either against a fake would
 test nothing. The suite drops every table it touches, so it refuses to start unless the database
@@ -771,7 +977,7 @@ backend/
     worker/         APScheduler worker
     config.py  db.py  models.py  schemas.py  auth.py  main.py
   alembic/          migrations
-  tests/            394 tests, including the end-to-end test
+  tests/            481 tests, including the end-to-end test
   manage.py         operational CLI (seed, import, poll, pipeline, embed, status)
 frontend/
   src/              React + TypeScript pages, components, API client

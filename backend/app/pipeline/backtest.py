@@ -66,6 +66,8 @@ class BacktestParams:
     #: Keep only observations whose holding windows do not overlap. Trades
     #: sample size for independence -- see `drop_overlapping`.
     non_overlapping_only: bool = False
+    #: Restrict to events after DEPLOYED_AT. See `forward_only_start`.
+    forward_only: bool = False
     #: Fractions of the date range assigned to train / validation / test.
     splits: tuple[float, float, float] = (0.6, 0.2, 0.2)
 
@@ -80,6 +82,7 @@ class BacktestParams:
             "sentiment_mode": self.sentiment_mode,
             "include_low_confidence": self.include_low_confidence,
             "non_overlapping_only": self.non_overlapping_only,
+            "forward_only": self.forward_only,
             "splits": list(self.splits),
         }
 
@@ -179,6 +182,22 @@ def overlap_fraction(observations: list[Observation]) -> float:
     return overlapping / (len(ordered) - 1)
 
 
+def forward_only_start() -> dt.date | None:
+    """The date after which this deployment's data is its own.
+
+    Everything before `DEPLOYED_AT` is backfilled history. A language model may
+    have been trained on it, the rule-based lexicon was written knowing how it
+    turned out, and the thresholds were tuned while looking at it. Events after
+    that date are the only ones nothing in this system could have known about in
+    advance -- so a forward-only backtest is the only genuinely uncontaminated
+    read the tool can ever produce.
+
+    It is also the slowest: it says nothing until months of real events have
+    accumulated, and there is no way to hurry that up. That is the point.
+    """
+    return settings.deployed_at
+
+
 def drop_overlapping(observations: list[Observation]) -> list[Observation]:
     """Greedily keep a chronological set of non-overlapping holding windows.
 
@@ -275,7 +294,20 @@ def assign_split(day: dt.date, boundaries: list[tuple[str, dt.date, dt.date]]) -
 
 
 def _candidate_events(db: Session, params: BacktestParams) -> list[Event]:
-    start = dt.datetime.combine(params.start, dt.time.min, tzinfo=dt.timezone.utc)
+    effective_start = params.start
+    if params.forward_only:
+        deployed = forward_only_start()
+        if deployed is None:
+            # Silently running over the whole history would be the worst
+            # outcome: a contaminated result wearing a "forward only" label.
+            raise ValueError(
+                "forward_only requires DEPLOYED_AT to be set. Without it there is "
+                "no boundary between backfilled history and data this deployment "
+                "collected itself."
+            )
+        effective_start = max(effective_start, deployed)
+
+    start = dt.datetime.combine(effective_start, dt.time.min, tzinfo=dt.timezone.utc)
     end = dt.datetime.combine(params.end, dt.time.max, tzinfo=dt.timezone.utc)
 
     stmt = (
@@ -564,6 +596,24 @@ def _add_notes(result: BacktestResult, params: BacktestParams) -> None:
             f"Sharpe is annualised, assumes a zero cash rate, and is withheld below "
             f"{MIN_SHARPE_SAMPLE} observations."
         )
+    if params.forward_only:
+        deployed = forward_only_start()
+        result.notes.append(
+            f"Forward-only: restricted to events after {deployed}, the date this "
+            "deployment started collecting its own data. Nothing in this system "
+            "-- not the model's training data, not the rule lexicon, not the "
+            "thresholds -- could have known about these events in advance. This "
+            "is the only uncontaminated read the tool can produce, and it stays "
+            "uninformative until months of real events have accumulated."
+        )
+    elif forward_only_start() is not None:
+        result.warnings.append(
+            f"This run includes events from before {forward_only_start()}, when "
+            "this deployment started. Those were backfilled, so the model may "
+            "have been trained on them and the thresholds were tuned while "
+            "looking at them. Re-run with 'forward only' for the clean read."
+        )
+
     if params.non_overlapping_only:
         result.notes.append(
             f"Non-overlapping mode: {result.dropped_overlapping} observation(s) were "

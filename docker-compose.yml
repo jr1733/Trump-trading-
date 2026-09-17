@@ -3,6 +3,21 @@
 #     cp .env.example .env && docker compose up --build
 #
 # Then open http://localhost:8080 and sign in with APP_AUTH_TOKEN.
+#
+# NETWORK EXPOSURE
+# ----------------
+# **nginx is the only service with a `ports:` entry.** Postgres, the API, the
+# worker and the static frontend are reachable only on the compose network, by
+# service name. This is not belt-and-braces with the firewall -- it is the only
+# thing actually protecting them, because Docker writes its own iptables rules
+# in the DOCKER chain, which is consulted before the FORWARD chain ufw manages.
+# A published port is reachable from the internet even when `ufw status` says
+# that port is denied. Binding to 127.0.0.1 is not used either: it works, but it
+# is one missing prefix away from 0.0.0.0 and the mistake is invisible in
+# review. There is no reason to publish these at all.
+#
+# If you add a `ports:` entry to any service below, you are putting it on the
+# public internet. `make compose-check` fails if you do.
 
 services:
   db:
@@ -12,7 +27,7 @@ services:
     image: pgvector/pgvector:pg16
     environment:
       POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
       POSTGRES_DB: trumpmarket
     volumes:
       - pgdata:/var/lib/postgresql/data
@@ -24,11 +39,13 @@ services:
     restart: unless-stopped
 
   # Runs migrations once, then exits. Both app containers wait for it.
+  # `manage.py seed` loads reference data only -- tickers, aliases, entities and
+  # the single user. It loads NO events and NO prices. See `make seed-audit`.
   migrate:
     build: ./backend
     env_file: .env
     environment:
-      DATABASE_URL: postgresql+psycopg://postgres:postgres@db:5432/trumpmarket
+      DATABASE_URL: postgresql+psycopg://postgres:${POSTGRES_PASSWORD:-postgres}@db:5432/trumpmarket
     command: sh -c "alembic upgrade head && python manage.py seed"
     depends_on:
       db:
@@ -39,7 +56,7 @@ services:
     build: ./backend
     env_file: .env
     environment:
-      DATABASE_URL: postgresql+psycopg://postgres:postgres@db:5432/trumpmarket
+      DATABASE_URL: postgresql+psycopg://postgres:${POSTGRES_PASSWORD:-postgres}@db:5432/trumpmarket
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -56,20 +73,78 @@ services:
     build: ./backend
     env_file: .env
     environment:
-      DATABASE_URL: postgresql+psycopg://postgres:postgres@db:5432/trumpmarket
+      DATABASE_URL: postgresql+psycopg://postgres:${POSTGRES_PASSWORD:-postgres}@db:5432/trumpmarket
     command: python -m app.worker.scheduler
     depends_on:
       migrate:
         condition: service_completed_successfully
     restart: unless-stopped
 
+  # Static bundle plus its own cache policy (frontend/nginx.conf). Not
+  # published: the edge nginx proxies to it.
   web:
     build: ./frontend
-    ports:
-      - "8080:80"
     depends_on:
       - api
     restart: unless-stopped
 
+  # The only publicly reachable service.
+  nginx:
+    image: nginx:1.27-alpine
+    ports:
+      # Local default 8080/8443; production sets HTTP_PORT=80 HTTPS_PORT=443.
+      - "${HTTP_PORT:-8080}:80"
+      - "${HTTPS_PORT:-8443}:443"
+    environment:
+      DOMAIN: ${DOMAIN:-localhost}
+      # Without this filter envsubst would eat nginx's own $uri / $host
+      # variables and the config would silently stop working.
+      NGINX_ENVSUBST_FILTER: "DOMAIN"
+    volumes:
+      # NGINX_CONF=app.conf (default, HTTP only) or app-tls.conf once certbot
+      # has issued a certificate.
+      - ./deploy/nginx/${NGINX_CONF:-app.conf}:/etc/nginx/templates/default.conf.template:ro
+      - ./deploy/nginx/snippets:/etc/nginx/snippets:ro
+      - certbot-webroot:/var/www/certbot:ro
+      - letsencrypt:/etc/letsencrypt:ro
+    depends_on:
+      - api
+      - web
+    restart: unless-stopped
+
+  # Renewal loop. Certbot wakes twice a day, renews anything within 30 days of
+  # expiry, and does nothing otherwise. The FIRST certificate is issued by hand
+  # -- see README "TLS".
+  certbot:
+    image: certbot/certbot:latest
+    volumes:
+      - certbot-webroot:/var/www/certbot
+      - letsencrypt:/etc/letsencrypt
+    entrypoint: >
+      sh -c "trap exit TERM;
+             while :; do certbot renew --webroot -w /var/www/certbot --quiet;
+             sleep 12h & wait $${!}; done"
+    restart: unless-stopped
+
+  # Nightly pg_dump with 7-day retention. Runs in-container rather than as a
+  # host cron so it needs no host postgres client and cannot drift out of sync
+  # with the database image's version.
+  backup:
+    image: pgvector/pgvector:pg16
+    environment:
+      PGPASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      BACKUP_RETENTION_DAYS: ${BACKUP_RETENTION_DAYS:-7}
+      BACKUP_HOUR: ${BACKUP_HOUR:-3}
+    volumes:
+      - ./deploy/backup.sh:/usr/local/bin/backup.sh:ro
+      - ${BACKUP_DIR:-./backups}:/backups
+    entrypoint: ["/bin/sh", "/usr/local/bin/backup.sh"]
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+
 volumes:
   pgdata:
+  certbot-webroot:
+  letsencrypt:

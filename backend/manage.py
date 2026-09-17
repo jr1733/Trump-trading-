@@ -9,6 +9,13 @@
     python manage.py demo              # seed + archive + poll + pipeline + embed
     python manage.py embed             # (re)build embeddings for similarity search
     python manage.py status            # counts, source health, LLM spend
+    python manage.py purge-mock        # delete synthetic events, signals, prices
+
+`seed` loads REFERENCE DATA ONLY -- tickers, aliases, entities, the user,
+watchlist, alert rules, preferences and source rows. It loads no events and no
+prices, so it is safe to run on production; that is why docker-compose runs it
+on every start. `import-archive` and `demo` are the ones that load synthetic
+events -- never run those against a production database.
 """
 
 from __future__ import annotations
@@ -23,7 +30,7 @@ from app.db import session_scope
 from app.llm.fake import build_client
 from app.models import Event, LLMUsage, Notification, RawEvent, Signal, SourceHealth
 from app.pipeline import runner
-from app.seed import loader
+from app.seed import loader, purge
 from app.sources import registry
 
 
@@ -117,6 +124,32 @@ def cmd_status(_: argparse.Namespace) -> None:
         print(f"    {row.source_key:<18} {row.status:<12} failures={row.consecutive_failures}")
 
 
+def cmd_purge_mock(args: argparse.Namespace) -> None:
+    """Delete synthetic events, analyses, signals, matches, notifications and
+    prices. Reference data and configuration are left alone."""
+    with session_scope() as db:
+        counts = purge.count_synthetic(db)
+
+        total = sum(counts.values())
+        label = "would delete" if args.dry_run else "deleting"
+        print(f"{label} (sources: {', '.join(purge.SYNTHETIC_SOURCES)}; "
+              f"price providers: {', '.join(purge.SYNTHETIC_PRICE_PROVIDERS)}):")
+        for key, value in counts.items():
+            print(f"  {key:<20} {value}")
+        print(f"  {'TOTAL':<20} {total}")
+
+        if args.dry_run:
+            print("\ndry run: nothing was deleted. Re-run without --dry-run to apply.")
+            return
+        if total == 0:
+            print("\nnothing to delete.")
+            return
+
+        purge.purge_synthetic(db, all_notifications=args.all_notifications)
+        print("\ndone. Reference data (tickers, aliases, entities, user, watchlist,")
+        print("alert rules, preferences, sources) was NOT touched.")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = parser.add_subparsers(dest="command", required=True)
@@ -144,6 +177,20 @@ def main() -> None:
     embed.set_defaults(func=cmd_embed)
 
     sub.add_parser("status").set_defaults(func=cmd_status)
+
+    purge_cmd = sub.add_parser(
+        "purge-mock", help="delete synthetic events, signals and prices"
+    )
+    purge_cmd.add_argument(
+        "--dry-run", action="store_true", help="print counts and delete nothing"
+    )
+    purge_cmd.add_argument(
+        "--all-notifications",
+        action="store_true",
+        help="also clear digests and system alerts, which have no event_id and "
+             "therefore survive the event-scoped delete",
+    )
+    purge_cmd.set_defaults(func=cmd_purge_mock)
 
     args = parser.parse_args()
     args.func(args)

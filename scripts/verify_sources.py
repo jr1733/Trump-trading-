@@ -67,9 +67,13 @@ class Result:
         self.state = state
         self.detail = detail
 
+    #: Set for a failing *fallback* provider: worth reporting loudly, but it
+    #: does not mean the app has no prices.
+    non_fatal_override = False
+
     @property
     def fatal(self) -> bool:
-        return self.state not in NON_FATAL
+        return self.state not in NON_FATAL and not self.non_fatal_override
 
     def render(self) -> str:
         return f"  {self.name:<22} {colour(self.state):<20} {self.detail}"
@@ -125,8 +129,13 @@ def _why_disabled(key: str) -> str:
 # --------------------------------------------------------------------------
 # Market data
 # --------------------------------------------------------------------------
-def check_market(symbol: str, *, days: int = 14, verbose: bool = False) -> Result:
-    provider = build_provider()
+def check_market(
+    symbol: str, *, provider_name: str | None = None, days: int = 14, verbose: bool = False
+) -> Result:
+    # An explicit name bypasses the fallback chain, so each side of the chain is
+    # probed on its own -- otherwise a working fallback would hide a broken
+    # primary, which is exactly the thing this script exists to surface.
+    provider = build_provider(provider_name)
     end = dt.date.today()
     start = end - dt.timedelta(days=days)
 
@@ -189,16 +198,39 @@ def main() -> int:
             if symbol.upper() not in seen:
                 seen.append(symbol.upper())
 
-        print(f"\nMarket data (provider: {settings.market_data_provider})")
-        if settings.market_data_provider == "mock":
+        # Primary and fallback are probed separately, each bypassing the chain.
+        # A working fallback masking a broken primary is precisely the silent
+        # degradation this script exists to catch.
+        providers = [(settings.market_data_provider, True)]
+        fallback = (settings.market_data_fallback_provider or "").strip()
+        if fallback and fallback.lower() != settings.market_data_provider.lower():
+            providers.append((fallback, False))
+
+        for provider_name, is_primary in providers:
+            role = "primary" if is_primary else "fallback"
+            print(f"\nMarket data -- {role}: {provider_name}")
+            if provider_name.lower() == "mock":
+                print(
+                    f"  {DIM}mock provider: these bars are synthetic and always succeed."
+                    f"\n  Set MARKET_DATA_PROVIDER=stooq to verify the real thing.{RESET}"
+                )
+            for symbol in seen:
+                result = check_market(symbol, provider_name=provider_name, verbose=args.verbose)
+                # A fallback failing is serious but not the same as having no
+                # prices at all, so it is reported without failing the run.
+                if not is_primary and result.fatal:
+                    result = Result(
+                        result.name, result.state, result.detail + " (fallback only)"
+                    )
+                    result.non_fatal_override = True
+                results.append(result)
+                print(result.render())
+
+        if len(providers) == 1 and settings.market_data_provider.lower() != "mock":
             print(
-                f"  {DIM}mock provider: these bars are synthetic and always succeed."
-                f"\n  Set MARKET_DATA_PROVIDER=stooq to verify the real thing.{RESET}"
+                f"  {DIM}No fallback configured. Set MARKET_DATA_FALLBACK_PROVIDER so a"
+                f"\n  single moved endpoint cannot leave the app with no prices at all.{RESET}"
             )
-        for symbol in seen:
-            result = check_market(symbol, verbose=args.verbose)
-            results.append(result)
-            print(result.render())
 
     failures = [r for r in results if r.fatal]
     print()

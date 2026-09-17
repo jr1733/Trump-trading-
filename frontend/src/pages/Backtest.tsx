@@ -10,6 +10,7 @@ import {
   Spinner,
 } from '../components/ui';
 import { api } from '../lib/api';
+import { useConfig } from '../lib/useConfig';
 import { num, pct } from '../lib/format';
 
 interface MetricBlock {
@@ -81,7 +82,12 @@ export default function Backtest() {
   const [minSignal, setMinSignal] = useState(0.2);
   const [holdingDays, setHoldingDays] = useState(5);
   const [sentimentMode, setSentimentMode] = useState<'rule_based' | 'llm'>('rule_based');
-  const [nonOverlapping, setNonOverlapping] = useState(false);
+  // Defaults ON: the overlapping number flatters every dispersion statistic,
+  // so the honest one is what you see without asking for it.
+  const [nonOverlapping, setNonOverlapping] = useState(true);
+  const [forwardOnly, setForwardOnly] = useState(false);
+  const config = useConfig();
+  const deployedAt = config?.deployed_at ?? null;
 
   const [result, setResult] = useState<BacktestBody | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -101,6 +107,7 @@ export default function Backtest() {
         holding_days: holdingDays,
         sentiment_mode: sentimentMode,
         non_overlapping_only: nonOverlapping,
+        forward_only: forwardOnly,
       });
       setResult(body);
     } catch (err) {
@@ -230,15 +237,47 @@ export default function Backtest() {
               <input
                 type="checkbox"
                 className="mt-0.5"
+                disabled={!deployedAt}
+                checked={forwardOnly}
+                onChange={(e) => setForwardOnly(e.target.checked)}
+              />
+              <span className={deployedAt ? '' : 'opacity-50'}>
+                Forward only {deployedAt && <>&mdash; events after {deployedAt}</>}
+                <span className="mt-0.5 block text-[11px] text-muted">
+                  {deployedAt ? (
+                    <>
+                      The only genuinely uncontaminated read this tool can produce. Everything
+                      before that date was backfilled: the model may have been trained on it,
+                      the lexicon was written knowing how it turned out, and the thresholds
+                      were tuned while looking at it. Expect it to say nothing useful until
+                      months of real events have accumulated &mdash; that is the honest pace.
+                    </>
+                  ) : (
+                    <>
+                      Unavailable: <code>DEPLOYED_AT</code> is not set, so there is no boundary
+                      between backfilled history and data this deployment collected itself.
+                    </>
+                  )}
+                </span>
+              </span>
+            </label>
+          </div>
+
+          <div>
+            <label className="flex items-start gap-2 text-xs text-gray-300">
+              <input
+                type="checkbox"
+                className="mt-0.5"
                 checked={nonOverlapping}
                 onChange={(e) => setNonOverlapping(e.target.checked)}
               />
               <span>
-                Non-overlapping windows only
+                Non-overlapping windows only <span className="text-muted">(default)</span>
                 <span className="mt-0.5 block text-[11px] text-muted">
                   Keeps a chronological set whose holding periods never share a session, so
-                  the same stretch of calendar is not counted twice. Expect N to fall
-                  sharply &mdash; that smaller number is the independent one.
+                  the same stretch of calendar is not counted twice. N falls sharply &mdash;
+                  that smaller number is the independent one, which is why it is the default.
+                  Turn it off to see the larger, more correlated sample.
                 </span>
               </span>
             </label>

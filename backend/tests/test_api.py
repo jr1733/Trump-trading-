@@ -70,12 +70,30 @@ def test_malformed_authorization_header_is_rejected(client):
 
 def test_public_config_needs_no_auth_and_leaks_no_secrets(client):
     body = client.get("/api/config").json()
-    assert body["phase"] == 2
+    assert body["phase"] == 4
     blob = str(body).lower()
-    for secret in ("anthropic_api_key", "sk-ant", "smtp_password", "web_push_private"):
-        assert secret not in blob
+    for secret in (
+        "anthropic_api_key",
+        "sk-ant",
+        "smtp_password",
+        "smtp_username",
+        "web_push_private",
+        "market_data_api_key",
+        "congress_api_key",
+        "app_auth_token",
+        "database_url",
+    ):
+        assert secret not in blob, f"{secret} must never reach the browser"
     # The public VAPID key is the only key that may appear.
     assert "web_push_public_key" in body
+
+
+def test_public_config_exposes_the_flags_the_ui_needs(client):
+    """deployed_at gates the forward-only backtest control; shadow_model decides
+    whether the comparison panel renders at all."""
+    body = client.get("/api/config").json()
+    assert "deployed_at" in body
+    assert "shadow_model" in body
 
 
 def test_health_needs_no_auth(client):

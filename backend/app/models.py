@@ -231,9 +231,62 @@ class EventTicker(Base):
 # LLM analysis
 # --------------------------------------------------------------------------
 class ClaudeAnalysis(Base):
+    """One model reading of one piece of text.
+
+    The cache key is **(content_hash, model, mode)**, not content_hash alone.
+    Keying on the text alone was a real bug: the first COMPLETE row won forever,
+    so every event analysed during an `LLM_FAKE_MODE` week kept its canned
+    placeholder after real analysis was switched on -- silently, with no error
+    and nothing in the UI to notice. Model is in the key for the same reason
+    (switching to a cheaper model must re-analyse, not inherit).
+    """
+
     __tablename__ = "claude_analyses"
     __table_args__ = (
-        UniqueConstraint("content_hash", name="uq_claude_analyses_content_hash"),
+        UniqueConstraint(
+            "content_hash", "model", "mode", name="uq_claude_analyses_content_model_mode"
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    event_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("events.id", ondelete="CASCADE"), nullable=True, index=True
+    )
+    content_hash: Mapped[str] = mapped_column(String(64), index=True)
+    model: Mapped[str] = mapped_column(String(64))
+    #: "live" or "fake". Part of the cache key so canned results are never
+    #: mistaken for real ones.
+    mode: Mapped[str] = mapped_column(String(8), default="live", server_default="live")
+    status: Mapped[str] = mapped_column(String(16), default="COMPLETE")
+    raw_response: Mapped[str | None] = mapped_column(Text, nullable=True)
+    parsed: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+    validation_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    event_type: Mapped[str | None] = mapped_column(String(48), nullable=True)
+    sentiment: Mapped[float | None] = mapped_column(Float, nullable=True)
+    market_impact: Mapped[float | None] = mapped_column(Float, nullable=True)
+    confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
+    time_horizon: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    attempts: Mapped[int] = mapped_column(Integer, default=1)
+    created_at: Mapped[dt.datetime] = mapped_column(TS, default=utcnow)
+
+    event: Mapped[Event | None] = relationship(back_populates="analysis")
+
+
+class ShadowAnalysis(Base):
+    """A second model's reading of the same text, for comparison only.
+
+    Deliberately a **separate table** rather than a flag on `claude_analyses`.
+    The requirement is that a shadow result can never influence a signal or an
+    alert, and the way to guarantee that is for the code that builds signals to
+    have no path to this table at all -- not for it to remember a filter. There
+    is no relationship back to Event for the same reason: `event.analysis` can
+    never resolve to one of these.
+    """
+
+    __tablename__ = "shadow_analyses"
+    __table_args__ = (
+        UniqueConstraint("content_hash", "model", name="uq_shadow_content_model"),
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
@@ -252,10 +305,8 @@ class ClaudeAnalysis(Base):
     market_impact: Mapped[float | None] = mapped_column(Float, nullable=True)
     confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
     time_horizon: Mapped[str | None] = mapped_column(String(16), nullable=True)
-    attempts: Mapped[int] = mapped_column(Integer, default=1)
+    estimated_cost_usd: Mapped[float] = mapped_column(Float, default=0.0)
     created_at: Mapped[dt.datetime] = mapped_column(TS, default=utcnow)
-
-    event: Mapped[Event | None] = relationship(back_populates="analysis")
 
 
 class EventEmbedding(Base):

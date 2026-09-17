@@ -64,7 +64,9 @@ def public_config() -> dict:
             "limited_below": settings.min_reliable_sample,
         },
         "primary_horizon": settings.signal_primary_horizon,
-        "phase": 2,
+        "deployed_at": settings.deployed_at.isoformat() if settings.deployed_at else None,
+        "shadow_model": settings.shadow_analysis_model,
+        "phase": 4,
     }
 
 
@@ -471,6 +473,22 @@ def data_quality(db: Session = Depends(get_db), _: User = Depends(current_user))
             key=lambda r: (-r["events"], r["source"]),
         ),
     }
+
+
+@router.get("/admin/shadow-comparison")
+def shadow_comparison(
+    db: Session = Depends(get_db),
+    _: User = Depends(current_user),
+    limit: int = Query(200, ge=1, le=2000),
+) -> dict:
+    """Primary model vs shadow model, on events that have both.
+
+    Read-only, and the shadow rows it reads are in their own table that nothing
+    else in the app touches -- see `pipeline/shadow.py`.
+    """
+    from ..pipeline import shadow
+
+    return shadow.comparison(db, limit=limit)
 
 
 @router.get("/admin/jobs")

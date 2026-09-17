@@ -4,7 +4,7 @@ VENV ?= .venv
 PY   := $(VENV)/bin/python
 PIP  := $(VENV)/bin/pip
 
-.PHONY: help venv install migrate seed demo api worker test frontend build up down logs status verify-sources
+.PHONY: help venv install migrate seed demo api worker test frontend build up down logs status verify-sources compose-check purge-mock backup-now restore
 
 help:  ## Show this help
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}{printf "  %-12s %s\n", $$1, $$2}'
@@ -26,6 +26,24 @@ demo:  ## Seed + load the sample archive + poll + run the pipeline + embed
 
 embed:  ## Embed events that have no vector (or whose vector is stale)
 	cd backend && ../$(PY) manage.py embed
+
+compose-check:  ## Fail if anything but nginx publishes a port
+	python3 scripts/check_compose_exposure.py
+
+purge-mock:  ## Delete synthetic events/signals/prices (ARGS="--dry-run")
+	cd backend && ../$(PY) manage.py purge-mock $(ARGS)
+
+backup-now:  ## Take a database backup immediately
+	docker compose run --rm backup /usr/local/bin/backup.sh once
+
+restore:  ## Restore from a dump: make restore DUMP=backups/trumpmarket-....dump
+	@test -n "$(DUMP)" || (echo "usage: make restore DUMP=backups/trumpmarket-....dump" && exit 1)
+	docker compose stop api worker
+	docker compose exec -T db dropdb -U postgres --if-exists trumpmarket
+	docker compose exec -T db createdb -U postgres trumpmarket
+	docker compose exec -T db pg_restore -U postgres -d trumpmarket --no-owner < $(DUMP)
+	docker compose start api worker
+	@echo "restored from $(DUMP)"
 
 verify-sources:  ## Probe live feeds + market data (ARGS="--all-sources -v")
 	$(PY) scripts/verify_sources.py $(ARGS)

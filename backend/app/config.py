@@ -7,6 +7,7 @@ the only value exposed through the public `/api/config` endpoint is the Web Push
 
 from __future__ import annotations
 
+import datetime as dt
 import json
 from functools import lru_cache
 from typing import Annotated, Any
@@ -83,7 +84,12 @@ class Settings(BaseSettings):
     event_study_min_observations: int = 60
 
     # --- market data ------------------------------------------------------
-    market_data_provider: str = "mock"  # mock | stooq
+    market_data_provider: str = "mock"  # mock | stooq | alphavantage
+    # Tried when the primary raises. Empty disables the chain. This is the one
+    # switch: every endpoint in this repo is an unverified guess, so a single
+    # provider is a single point of failure for every number the app computes.
+    market_data_fallback_provider: str | None = None
+    # Used by alphavantage. Stooq needs no key.
     market_data_api_key: str | None = None
     market_context_symbols: StrList = Field(
         default_factory=lambda: ["SPY", "QQQ", "VIX", "TNX"]
@@ -155,6 +161,22 @@ class Settings(BaseSettings):
     alerts_require_usable_sample: bool = True
     # Which horizon drives the signal when several are available.
     signal_primary_horizon: str = "1d"
+
+    # --- forward-only evaluation ------------------------------------------
+    # The date this deployment started collecting its own data. Everything
+    # before it is backfilled history that the analysis model may have been
+    # trained on; everything after it the model could not have known about.
+    # A backtest restricted to events after this date is the only genuinely
+    # uncontaminated read this tool can ever produce -- and it needs months of
+    # real running before it says anything at all.
+    deployed_at: dt.date | None = None
+
+    # --- shadow model comparison ------------------------------------------
+    # When set, a random sample of analysed events is ALSO run on this model and
+    # stored in `shadow_analyses`, which nothing that builds a signal reads.
+    # Off by default: it is a second bill.
+    shadow_analysis_model: str | None = None
+    shadow_sample_rate: float = 0.1
 
     # --- digests (Phase 3) ------------------------------------------------
     digest_enabled: bool = True
