@@ -4,7 +4,7 @@ VENV ?= .venv
 PY   := $(VENV)/bin/python
 PIP  := $(VENV)/bin/pip
 
-.PHONY: help venv install migrate seed demo api worker test frontend build up down logs
+.PHONY: help venv install migrate seed demo api worker test frontend build up down logs status
 
 help:  ## Show this help
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}{printf "  %-12s %s\n", $$1, $$2}'
@@ -26,6 +26,9 @@ demo:  ## Seed + load the sample archive + poll + run the pipeline + embed
 
 embed:  ## Embed events that have no vector (or whose vector is stale)
 	cd backend && ../$(PY) manage.py embed
+
+status:  ## Print pipeline, source and market-data health
+	cd backend && ../$(PY) manage.py status
 
 vapid:  ## Generate a VAPID keypair for Web Push
 	$(PY) scripts/generate_vapid_keys.py

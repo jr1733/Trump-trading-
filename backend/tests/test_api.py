@@ -279,13 +279,41 @@ def test_import_endpoint_validates_its_body(client):
     assert ok.json()["inserted"] == 1
 
 
+BANNED_PHRASES = ("buy now", "sell now", "guaranteed", "risk-free", "risk free")
+
+
 def test_no_endpoint_emits_trading_language(client):
     """The UI must never say buy/sell/guaranteed/risk-free."""
-    banned = ("buy now", "sell now", "guaranteed", "risk-free", "risk free")
-    for path in ["/api/events", "/api/dashboard", "/api/digest", "/api/watchlist"]:
+    for path in [
+        "/api/events",
+        "/api/dashboard",
+        "/api/digest",
+        "/api/watchlist",
+        "/api/digest/preview",
+        "/api/backtest/runs",
+        "/api/admin/data-quality",
+    ]:
         blob = client.get(path, headers=AUTH).text.lower()
-        for phrase in banned:
+        for phrase in BANNED_PHRASES:
             assert phrase not in blob, f"{path} contains {phrase!r}"
+
+
+@pytest.mark.parametrize("mode", ["rule_based", "llm"])
+def test_backtest_notes_avoid_trading_language(mode):
+    """The Sharpe note is the trap here: the textbook term for its numerator is
+    one of the banned phrases, so it is deliberately spelled "cash rate"."""
+    from app.pipeline import backtest as bt
+
+    params = bt.BacktestParams(
+        start=dt.date(2024, 1, 1), end=dt.date(2026, 1, 1), sentiment_mode=mode
+    )
+    result = bt.BacktestResult(params=params, overall={"n": 40, "sharpe": 0.4})
+    bt._add_notes(result, params)
+
+    blob = (" ".join(result.notes + result.warnings)).lower()
+    assert "sharpe" in blob, "the note under test must actually be present"
+    for phrase in BANNED_PHRASES:
+        assert phrase not in blob, f"backtest notes contain {phrase!r}"
 
 
 # --- Phase 2 endpoints ----------------------------------------------------

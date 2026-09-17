@@ -399,3 +399,65 @@ def test_digest_contains_every_required_section(db, user):
     assert digest["top_bearish"][0]["ticker"] == "AAPL"
     assert digest["notification_summary"]["total"] == 1
     assert digest["source_health"][0]["source"] == "mock"
+
+
+# --- search-to-alert (Phase 3) -------------------------------------------
+def test_saved_search_matches_the_same_events_as_search(db, user):
+    """An alert made from a search must fire on what that search returns."""
+    event = make_event(db, text="Tariffs on imported semiconductors are under review.")
+    assert notif.event_matches_search(db, event, "tariffs") is True
+    assert notif.event_matches_search(db, event, "golf") is False
+
+
+def test_saved_search_understands_phrases_and_negation(db, user):
+    """Full text, not substring: this is why the query goes through Postgres."""
+    event = make_event(db, text="Tariffs on imported semiconductors are under review.")
+    assert notif.event_matches_search(db, event, '"imported semiconductors"') is True
+    assert notif.event_matches_search(db, event, '"semiconductors imported"') is False
+    assert notif.event_matches_search(db, event, "tariffs -semiconductors") is False
+
+
+def test_an_empty_saved_search_matches_nothing(db, user):
+    event = make_event(db)
+    assert notif.event_matches_search(db, event, "") is False
+    assert notif.event_matches_search(db, event, "   ") is False
+
+
+def test_a_malformed_saved_search_does_not_break_evaluation(db, user):
+    event = make_event(db)
+    # Must return False rather than raising, or one bad rule kills every rule.
+    assert notif.event_matches_search(db, event, "((((") is False
+
+
+def test_search_rule_creates_a_notification(db, user):
+    db.add(
+        AlertRule(
+            user_id=user.id,
+            name="Search: semiconductors",
+            rule_type="new_event",
+            keywords=["semiconductors"],
+            search_query="semiconductors",
+        )
+    )
+    db.commit()
+    event = make_event(db, text="Tariffs on imported semiconductors are under review.")
+
+    created = notif.evaluate_event_rules(db, user_id=user.id, event=event, signals=[])
+    db.commit()
+    assert len(created) == 1
+    assert created[0].payload["matched"].startswith("search:")
+
+
+def test_search_rule_that_does_not_match_stays_quiet(db, user):
+    db.add(
+        AlertRule(
+            user_id=user.id,
+            name="Search: golf",
+            rule_type="new_event",
+            keywords=["tariff"],  # would match on keywords alone
+            search_query="golf",  # but the saved search is the real intent
+        )
+    )
+    db.commit()
+    event = make_event(db, text="Tariffs on imported semiconductors are under review.")
+    assert notif.evaluate_event_rules(db, user_id=user.id, event=event, signals=[]) == []

@@ -10,6 +10,7 @@ import TickerDetail from './pages/TickerDetail';
 import Search from './pages/Search';
 import Notifications from './pages/Notifications';
 import Backtest from './pages/Backtest';
+import DataQuality from './pages/DataQuality';
 import Settings from './pages/Settings';
 import { api, getToken } from './lib/api';
 
@@ -82,6 +83,7 @@ export default function App() {
           <Route path="/search" element={<Search />} />
           <Route path="/notifications" element={<Notifications onChange={refreshUnread} />} />
           <Route path="/backtest" element={<Backtest />} />
+          <Route path="/data-quality" element={<DataQuality />} />
           <Route path="/settings" element={<Settings onSignedOut={() => setAuthed(false)} />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>

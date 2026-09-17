@@ -11,7 +11,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from .api import routes_admin, routes_feed, routes_user
+from .api import routes_admin, routes_backtest, routes_feed, routes_user
 from .config import settings
 
 logging.basicConfig(
@@ -52,6 +52,7 @@ app.add_middleware(
 )
 
 app.include_router(routes_admin.router)
+app.include_router(routes_backtest.router)
 app.include_router(routes_feed.router)
 app.include_router(routes_user.router)
 

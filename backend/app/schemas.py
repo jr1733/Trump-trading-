@@ -8,7 +8,7 @@ from __future__ import annotations
 import datetime as dt
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 class TickerLink(BaseModel):
@@ -179,3 +179,38 @@ class NotificationOut(BaseModel):
     archived_at: dt.datetime | None = None
     payload: dict[str, Any] = Field(default_factory=dict)
     deliveries: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class BacktestIn(BaseModel):
+    """Backtest request.
+
+    `sentiment_mode` defaults to `rule_based` deliberately: an LLM-scored
+    backtest may be contaminated by the model's own knowledge of what followed
+    these events, and the default should be the clean one.
+    """
+
+    start: dt.date
+    end: dt.date
+    ticker: str | None = None
+    event_type: str | None = None
+    min_signal: float = Field(default=0.2, ge=0.0, le=1.0)
+    holding_days: int = Field(default=5, ge=1, le=60)
+    sentiment_mode: Literal["rule_based", "llm"] = "rule_based"
+    include_low_confidence: bool = False
+    train_fraction: float = Field(default=0.6, gt=0.0, lt=1.0)
+    validation_fraction: float = Field(default=0.2, ge=0.0, lt=1.0)
+
+    @field_validator("ticker")
+    @classmethod
+    def _upper(cls, value: str | None) -> str | None:
+        return value.strip().upper().lstrip("$") if value else None
+
+    @model_validator(mode="after")
+    def _check_range(self) -> "BacktestIn":
+        if self.end <= self.start:
+            raise ValueError("end must be after start")
+        if (self.end - self.start).days < 30:
+            raise ValueError("a backtest window shorter than 30 days cannot be split")
+        if self.train_fraction + self.validation_fraction >= 1.0:
+            raise ValueError("train and validation fractions must leave room for a test split")
+        return self

@@ -93,6 +93,9 @@ class Settings(BaseSettings):
     # --- sources ----------------------------------------------------------
     news_api_key: str | None = None
     congress_api_key: str | None = None
+    # OGE publishes documents, not an API. Point this at a structured index you
+    # are entitled to use, or leave it unset and import filings manually.
+    oge_feed_url: str | None = None
     news_rss_feeds: StrList = Field(default_factory=lambda: list(DEFAULT_NEWS_FEEDS))
     whitehouse_feeds: StrList = Field(default_factory=lambda: list(DEFAULT_WHITEHOUSE_FEEDS))
     federal_register_base: str = "https://www.federalregister.gov/api/v1/documents.json"
@@ -136,6 +139,11 @@ class Settings(BaseSettings):
     min_usable_sample: int = 10
     # Which horizon drives the signal when several are available.
     signal_primary_horizon: str = "1d"
+
+    # --- digests (Phase 3) ------------------------------------------------
+    digest_enabled: bool = True
+    # Hourly digests are opt-in; the daily one is the default cadence.
+    hourly_digest_enabled: bool = False
 
     # --- scheduling (minutes) --------------------------------------------
     poll_interval_high_minutes: int = 2

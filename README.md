@@ -8,8 +8,8 @@ Donald Trump, and shows **how comparable past events related to market movements
 > associations between past announcements and past price moves, from small and non-independent
 > samples. **Association is not causation, and nothing here is a forecast or a recommendation.**
 
-**Current status: Phase 2 complete.** See [Phase status](#phase-status) for exactly what works,
-what is mocked, and what is not built yet.
+**Current status: Phase 3 complete.** See [Phase status](#phase-status) for exactly what works,
+what is mocked, and what needs a key.
 
 ---
 
@@ -66,7 +66,7 @@ or notification — there is an end-to-end test that asserts exactly this.
 
 ### Pages
 
-**Live · Watchlist · Tickers · Search · Notifications · Backtest · Settings**
+**Live · Watchlist · Tickers · Search · Notifications · Backtest · Settings · Data quality**
 
 | Page | What it shows |
 |---|---|
@@ -76,7 +76,8 @@ or notification — there is an end-to-end test that asserts exactly this.
 | **Notifications** | Unread badge, read/unread, archive, delete, mark-all-read, and the per-channel delivery status of each notification. |
 | **Event detail** | The full text, the model's fact/position/claim/speculation split, the signal, provenance timestamps, and the **similar past events** list with what each one was followed by. |
 | **Settings** | Notification permission and push status, quiet hours, thresholds, digest settings, a test-notification button, source health, the live signal weights and embedding measure, and manual poll/pipeline/seed/embed/push-retry triggers. |
-| **Backtest** | Phase 3. States the look-ahead and LLM-contamination rules the feature will be built under. |
+| **Backtest** | Run a point-in-time backtest over any window: pick tickers, event type, signal threshold, holding period, and rule-based or model sentiment. Chronological train/validation/test splits, mean/median/win-rate/SD/max-drawdown/Sharpe, overlap fraction, and a contamination banner when the model scored it. |
+| **Data quality & cost** (`/data-quality`) | Pipeline backlog, missing embeddings, duplicate hashes, future timestamps, ticker-match confidence, market-data staleness, stale sources, malformed model output, processing errors, failed deliveries, recent worker jobs, and seven days of model spend extrapolated to a monthly figure. Reached from Settings. |
 
 ---
 
@@ -216,6 +217,43 @@ and the 13:00 early closes) are handled in `app/market/calendar.py` and covered 
 
 ---
 
+## Backtesting
+
+```
+POST /api/backtest
+{ "start": "2024-01-01", "end": "2026-09-01", "ticker": null, "event_type": null,
+  "min_signal": 0.2, "holding_days": 5, "sentiment_mode": "rule_based" }
+```
+
+Each event in the window is scored **as of its own timestamp**. `build_comparable_set` is called
+with the event's `source_timestamp` as the upper bound and `persist=False`, so a backtest can
+neither see the future nor write into the live signal tables. The observation is the price change
+over `holding_days` sessions from the reaction day, aligned to the signal's direction.
+
+**`sentiment_mode`**
+
+| Mode | What it uses | Contamination |
+|---|---|---|
+| `rule_based` *(default)* | A fixed lexicon. No model call, no network. | None. This is the clean comparison. |
+| `llm` | The stored model analysis for each event. | **Labelled contaminated.** The model may already know what followed. Treat it as an upper bound, not a measurement. |
+
+**Splits are chronological.** The window is cut into train (first 60%), validation (next 20%) and
+test (last 20%) *by date*. Random k-fold on a time series lets the future inform the past and is
+never offered, not even as an option.
+
+**What the numbers mean — and do not mean.** Mean, median, win rate, SD, max drawdown (on the
+cumulative sum of observations), best and worst are reported per split. Sharpe is annualised but
+**withheld below 20 observations**. `overlap_fraction` reports how many holding windows overlap a
+previous one; overlapping windows are correlated, so effective N is smaller than N and apparent
+significance is inflated. Nothing here models costs, spread, slippage, position sizing or capital
+— these are signal-aligned price changes, not returns on a portfolio.
+
+Runs are stored, so `GET /api/backtest/runs` gives you the history and
+`GET /api/backtest/runs/{id}` the detail. Against the default mock market provider, a backtest
+measures the mock provider and nothing else.
+
+---
+
 ## Data sources
 
 | Source | Status | Notes |
@@ -225,10 +263,15 @@ and the 13:00 early closes) are handled in `app/market/calendar.py` and covered 
 | **Federal Register** | ✅ implemented | Official, free, **no API key**. The authoritative record for executive orders and proclamations. Lags the press release by hours to days, so it backstops rather than races. |
 | **News RSS** | ✅ implemented | Configurable feeds. **Headline, publication, author, timestamp, URL and a short summary only** — full article text is never stored, and the truncation is enforced at ingestion. |
 | **Truth Social** | ⛔ **manual import only** | No official public API, and the terms of service prohibit unauthorised automated access. We ship the adapter interface, a mock, and a CSV/JSON importer — and refuse to scrape. See [`docs/PHASE0_FEASIBILITY.md`](docs/PHASE0_FEASIBILITY.md) §1.1. |
-| **Congress.gov** | ⏳ Phase 3 | Official free API; `CONGRESS_API_KEY` is already wired through. |
-| **OGE** | ⏳ Phase 3 | Public filings only. The schema has no field that could hold an inferred holding. |
+| **Congress.gov** | ✅ implemented | Official free API. Needs a free `CONGRESS_API_KEY`; without one the adapter reports `NEEDS_KEY` and polls nothing rather than erroring. A bill's *latest action date* is part of its identity, so a bill that moves is a new event rather than a duplicate of its introduction. |
+| **OGE** | ⛔ **manual import only** | OGE publishes filings as documents, not as an API. The adapter stores only what a filing itself lists — filing date, individual, form type, listed entities, source URL, document reference — and carries a disclaimer field. There is **no** value, share-count or position field anywhere in the payload, so an undisclosed holding cannot be inferred even by accident. Point `OGE_FEED_URL` at a JSON index you maintain, or use the manual import. |
 
-Enable sources with `ENABLED_SOURCES=mock,whitehouse,federal_register,news_rss`.
+Enable sources with `ENABLED_SOURCES=mock,whitehouse,federal_register,news_rss,congress`.
+
+A source that is implemented but unconfigured reports its own state rather than failing:
+`NEEDS_KEY` (Congress without a key) and `MANUAL_ONLY` (Truth Social, OGE) are configuration
+states, not errors — they never count towards the failure threshold and never raise a degraded-
+source alert.
 
 **One failing source never affects another.** Each adapter runs in isolation, records its own
 health row (ONLINE / DEGRADED / ERROR with a failure counter), and repeated failures raise a
@@ -261,6 +304,29 @@ Key choices:
   for a real one.
 - `ANTHROPIC_ANALYSIS_MODEL` — defaults to `claude-opus-5`. Switching to `claude-sonnet-5` cuts
   the analysis bill by roughly 60% at the same traffic.
+
+---
+
+## Digests
+
+A digest is a scheduled summary: top bullish and bearish signals, watchlist events, source health,
+notification counts and unresolved delivery failures, with the "association is not causation"
+note attached.
+
+It fires at **each user's own local digest hour** (`digest_hour_local`, in their `timezone`), not
+at a fixed UTC hour, so the schema stays correct if a second user in another timezone is ever
+added. The worker checks every hour and sends only what is due.
+
+Two deliberate exceptions: a digest **ignores quiet hours and the per-hour rate limit**. Both of
+those exist to suppress unsolicited interruptions, and a digest the user scheduled is not one.
+
+Idempotency is per local *day* (per local *hour* for the opt-in `HOURLY_DIGEST_ENABLED` cadence),
+so a worker restart or a manual `POST /api/digest/send` cannot send the same digest twice.
+`GET /api/digest/preview` renders it without sending.
+
+Delivery goes to the in-app notification centre first — that is the system of record — and to
+email and push only if the user has enabled those channels. **An email or push failure never
+loses the digest.**
 
 ---
 
@@ -381,7 +447,7 @@ Work down this list; each step rules out the one below it.
 make test            # or: cd backend && python -m pytest -q
 ```
 
-**289 tests, all passing.** They run against a real Postgres with pgvector (`trumpmarket_test`
+**368 tests, all passing.** They run against a real Postgres with pgvector (`trumpmarket_test`
 by default; override with `TEST_DATABASE_URL`) because the idempotency guarantees are enforced by
 database constraints and the similarity search is real SQL — testing either against a fake would
 test nothing. The suite drops every table it touches, so it refuses to start unless the database
@@ -399,6 +465,14 @@ novelty windows and the lexical fallback · VAPID status-code handling (201 / 40
 5xx / raised) · retry scheduling, budget exhaustion and subscription retirement · OLS market-model
 recovery of a known β · abnormal returns isolating a known shock · an event study that finds a
 planted effect *and* correctly finds nothing when there is nothing.
+
+Phase 3 adds: point-in-time signal recomputation · chronological splits that never shuffle ·
+max drawdown and the Sharpe sample floor · overlapping-window detection · the rule-based /
+LLM contamination label · digest scheduling in the user's own timezone · digest idempotency
+across local days and cadences · digests overriding quiet hours and rate limits by design ·
+Congress bill identity and date parsing · the OGE payload's *absence* of any value field ·
+`NEEDS_KEY` / `MANUAL_ONLY` reporting · search-to-alert parity (an alert built from a search
+fires on exactly the events that search returns).
 
 The **end-to-end test** (`tests/test_e2e.py`) does exactly what the spec asks: inserts a mock
 event, runs the pipeline, generates a signal, matches a watchlist rule, creates an in-app
@@ -454,11 +528,43 @@ tested.
 **Truth Social:** still manual-import only. No terms-compliant public feed was identified, so
 nothing changed — see [`docs/PHASE0_FEASIBILITY.md`](docs/PHASE0_FEASIBILITY.md) §1.1.
 
-### Phase 3 — not built
+### Phase 3 — complete
 
-Congress.gov, OGE, email digests on a schedule, search-to-alert scheduling, backtesting, the
-data-quality page as a UI (the endpoint exists at `/api/admin/data-quality`), and the admin cost
-page.
+**Works:** a real backtest engine (`POST /api/backtest`) that recomputes every signal
+point-in-time, splits observations chronologically into train / validation / test, and reports
+mean, median, win rate, SD, max drawdown, Sharpe, best/worst and overlap fraction per split ·
+stored runs (`GET /api/backtest/runs`) · scheduled daily digests that fire at each user's own
+local digest hour over in-app, email and push · the Congress.gov adapter · the OGE manual-import
+adapter · search-to-alert parity, so an alert created from a search fires on exactly the events
+that search returns · the data-quality and cost page in the UI.
+
+**Backtest honesty rules, all enforced in code:**
+
+- **Rule-based sentiment is the default mode and involves no language model at all.** An
+  LLM-scored run is available and carries a visible *"potentially contaminated"* banner, because
+  the model's training data may already contain knowledge of what followed those events.
+- Splits are **chronological, never random** — shuffling time-series observations into random
+  folds lets the future inform the past.
+- Every signal is recomputed as of the event's own timestamp: comparable events, similarity and
+  novelty are all bounded by it, and the backtest writes nothing to the live signal tables.
+- Overlapping holding windows are counted and reported, because they inflate apparent
+  significance.
+- Sharpe is withheld below 20 observations rather than printed from a sample too small to mean
+  anything.
+- No costs, spread, slippage, position sizing or capital are modelled. These are signal-aligned
+  price changes, not returns on a portfolio, and the results page says so.
+
+**Digests:** the daily digest is something the user asked for, so it deliberately **overrides
+quiet hours and the hourly rate limit** — both exist to suppress interruptions, not scheduled
+summaries. It is idempotent per local day (and per local hour for the opt-in hourly cadence), so
+a worker restart cannot send it twice. `NEEDS_KEY` and `MANUAL_ONLY` sources are excluded from
+the digest's "degraded sources" line: an unconfigured source is not a broken one.
+
+**Needs a key:** Congress.gov needs a free `CONGRESS_API_KEY`. Email digests need SMTP; push
+needs VAPID keys. Without any of them the in-app notification centre still delivers the digest.
+
+**Not implementable reliably:** OGE has no API, so it is manual-import (or a JSON index you
+maintain) rather than a poller — the same position as Truth Social, for a different reason.
 
 ---
 
@@ -507,8 +613,11 @@ These are real and they do not have workarounds:
    service. Every URL is configurable and every adapter fails into the health table by design —
    but check Settings → Sources on first deployment. See `docs/PHASE0_FEASIBILITY.md`.
 8. **LLM contamination in backtests.** A model's training data may contain knowledge of what
-   followed a historical event. When backtesting ships it will default to rule-based sentiment,
-   and any LLM-scored backtest will be labelled "potentially contaminated".
+   followed a historical event, so an LLM-scored backtest can look predictive for reasons that
+   have nothing to do with the signal. Backtesting therefore defaults to rule-based sentiment,
+   which involves no model at all, and every LLM-scored run carries a "potentially contaminated"
+   banner. There is no way to remove the contamination — only to label it and offer the clean
+   comparison.
 9. **The default embedder is lexical.** It matches shared wording, not meaning, so two
    differently-worded statements about the same policy will look unrelated to it. Semantic
    embeddings are one env var away but cost ~2 GB of dependencies. The UI names the active
@@ -520,6 +629,12 @@ These are real and they do not have workarounds:
 11. **Event studies on political events rarely reach significance.** With a few dozen comparable
    events and daily bars, the honest answer is usually "no detectable effect". The UI says so
    rather than dressing up a t-statistic of 0.4.
+12. **Backtest results are not portfolio results.** No costs, spread, slippage, position sizing
+   or capital are modelled, holding windows overlap, and a backtest run over the mock provider
+   measures the mock provider. The numbers are signal-aligned price changes and nothing more.
+13. **OGE is manual.** There is no OGE API to poll, so filings arrive by import. The adapter is
+   deliberately built so that undisclosed holdings *cannot* be represented — there is no value,
+   share or position field to put them in.
 
 ---
 
@@ -533,13 +648,14 @@ backend/
     llm/            Anthropic client, prompts, schema, offline canned client
     market/         provider interface, mock + Stooq, US market calendar, returns
     pipeline/       relevance, ticker matching, analysis, historical, signals,
-                    event studies, notifications, web push, email, pipeline runner
+                    event studies, notifications, web push, email, digests,
+                    backtesting, pipeline runner
     seed/           mock dataset, sample archive, loader and archive importer
     sources/        adapter interface, adapters, HTTP retry/backoff, registry
     worker/         APScheduler worker
     config.py  db.py  models.py  schemas.py  auth.py  main.py
   alembic/          migrations
-  tests/            289 tests, including the end-to-end test
+  tests/            368 tests, including the end-to-end test
   manage.py         operational CLI (seed, import, poll, pipeline, embed, status)
 frontend/
   src/              React + TypeScript pages, components, API client

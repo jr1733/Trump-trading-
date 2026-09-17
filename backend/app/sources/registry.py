@@ -17,9 +17,11 @@ from sqlalchemy.orm import Session
 from ..config import settings
 from ..models import RawEvent, Source, SourceHealth, utcnow
 from .base import RawItem, SourceAdapter
+from .congress import CongressAdapter
 from .federal_register import FederalRegisterAdapter
 from .mock_source import MockSourceAdapter
 from .news_rss import NewsRSSAdapter
+from .oge import OGEAdapter
 from .truth_social import TruthSocialAdapter
 from .whitehouse import WhiteHouseAdapter
 
@@ -31,6 +33,8 @@ ADAPTERS: dict[str, type[SourceAdapter]] = {
     FederalRegisterAdapter.key: FederalRegisterAdapter,
     NewsRSSAdapter.key: NewsRSSAdapter,
     TruthSocialAdapter.key: TruthSocialAdapter,
+    CongressAdapter.key: CongressAdapter,
+    OGEAdapter.key: OGEAdapter,
 }
 
 PRIORITY_INTERVALS = {
@@ -150,7 +154,13 @@ def poll_source(db: Session, adapter: SourceAdapter) -> dict:
     result = {"source": adapter.key, "new_items": 0, "fetched": 0, "status": "ONLINE"}
     if not adapter.enabled():
         health = get_health(db, adapter.key)
-        health.status = "MANUAL_ONLY" if adapter.kind == "manual" else "DISABLED"
+        # "Needs a key" is a configuration state the operator can act on;
+        # "manual only" is a structural gap. Neither is an error.
+        health.status = (
+            "NEEDS_KEY"
+            if adapter.kind == "api"
+            else ("MANUAL_ONLY" if adapter.kind == "manual" else "DISABLED")
+        )
         health.last_attempt_at = utcnow()
         health.updated_at = utcnow()
         db.flush()

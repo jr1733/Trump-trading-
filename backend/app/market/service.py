@@ -80,6 +80,23 @@ class MarketDataService:
     def __init__(self, db: Session, provider: MarketDataProvider | None = None) -> None:
         self.db = db
         self.provider = provider or build_provider()
+        # Per-instance close cache. A backtest or event study asks for the same
+        # session's close thousands of times; without this, each one is a query.
+        # Invalidated whenever bars are written, so it cannot go stale.
+        self._close_cache: dict[tuple[str, dt.date], float | None] = {}
+        # symbol -> the date span already known to be populated in this session.
+        self._ensured: dict[str, tuple[dt.date, dt.date]] = {}
+        # Memo for compute_returns. A backtest evaluates the same comparable
+        # event against the same ticker once per observation; the answer cannot
+        # change within one run.
+        self._returns_cache: dict[tuple, dict[str, "ReturnResult"]] = {}
+
+    def _note_covered(self, symbol: str, start: dt.date, end: dt.date) -> None:
+        previous = self._ensured.get(symbol)
+        if previous is None:
+            self._ensured[symbol] = (start, end)
+        else:
+            self._ensured[symbol] = (min(previous[0], start), max(previous[1], end))
 
     # -- capability -------------------------------------------------------
     def available_horizons(self) -> list[str]:
@@ -123,6 +140,10 @@ class MarketDataService:
         )
         self.db.execute(stmt)
         self.db.flush()
+        # New bars may change any close, and therefore any return, we have
+        # already answered with.
+        self._close_cache.clear()
+        self._returns_cache.clear()
 
     def _cached_daily(self, symbol: str, start: dt.date, end: dt.date) -> list[MarketPrice]:
         stmt = (
@@ -143,6 +164,14 @@ class MarketDataService:
         A provider failure is logged and degraded to whatever is cached; callers
         decide what to do with too little data.
         """
+        # A backtest calls this thousands of times with overlapping windows.
+        # Remembering the span already satisfied for each symbol turns all but
+        # the first of those into a no-op.
+        key = symbol.upper()
+        covered = self._ensured.get(key)
+        if covered and covered[0] <= start and end <= covered[1]:
+            return self._cached_daily(symbol, start, end)
+
         cached = self._cached_daily(symbol, start, end)
         expected = sum(
             1
@@ -150,6 +179,7 @@ class MarketDataService:
             if mcal.is_trading_day(start + dt.timedelta(days=i))
         )
         if len(cached) >= max(expected - 1, 0) and cached:
+            self._note_covered(key, start, end)
             return cached
         try:
             self._store(self.provider.fetch_daily(symbol, start, end))
@@ -159,6 +189,7 @@ class MarketDataService:
         except Exception as exc:  # defensive: a provider bug must not kill the run
             log.exception("unexpected market provider error for %s: %s", symbol, exc)
             return cached
+        self._note_covered(key, start, end)
         return self._cached_daily(symbol, start, end)
 
     def ensure_intraday(
@@ -199,6 +230,11 @@ class MarketDataService:
         return (row.ts, float(row.adjusted_close or row.close)) if row else None
 
     def close_on(self, symbol: str, day: dt.date) -> tuple[dt.datetime, float] | None:
+        key = (symbol.upper(), day)
+        if key in self._close_cache:
+            price = self._close_cache[key]
+            return (mcal.session_open_utc(day), price) if price is not None else None
+
         target = mcal.session_open_utc(day)
         stmt = select(MarketPrice).where(
             MarketPrice.symbol == symbol.upper(),
@@ -207,7 +243,12 @@ class MarketDataService:
             MarketPrice.ts <= target + dt.timedelta(hours=12),
         )
         row = self.db.execute(stmt).scalars().first()
-        return (row.ts, float(row.adjusted_close or row.close)) if row else None
+        if row is None:
+            self._close_cache[key] = None
+            return None
+        price = float(row.adjusted_close or row.close)
+        self._close_cache[key] = price
+        return row.ts, price
 
     def daily_closes(self, symbol: str, start: dt.date, end: dt.date) -> dict[dt.date, float]:
         """Every cached daily close in a range, in one query.
@@ -224,10 +265,15 @@ class MarketDataService:
                 MarketPrice.ts <= mcal.session_open_utc(end) + dt.timedelta(hours=12),
             )
         ).all()
-        return {
+        closes = {
             row.ts.astimezone(mcal.EASTERN).date(): float(row.adjusted_close or row.close)
             for row in rows
         }
+        # Warm the per-day cache from the range query, so a later close_on()
+        # for any of these days is free.
+        for day, price in closes.items():
+            self._close_cache[(symbol.upper(), day)] = price
+        return closes
 
     def price_at(self, symbol: str, moment: dt.datetime, interval: str) -> tuple[dt.datetime, float] | None:
         stmt = (
@@ -262,6 +308,11 @@ class MarketDataService:
         the caller reports what came back, never a placeholder.
         """
         horizons = horizons or self.available_horizons()
+        cache_key = (symbol.upper(), event_time, tuple(horizons), include_abnormal)
+        memo = self._returns_cache.get(cache_key)
+        if memo is not None:
+            return memo
+
         anchor_ts, basis = mcal.anchor(event_time)
         results: dict[str, ReturnResult] = {}
 
@@ -278,6 +329,7 @@ class MarketDataService:
             results.update(
                 self._intraday_returns(symbol, anchor_ts, basis, intraday_wanted, include_abnormal)
             )
+        self._returns_cache[cache_key] = results
         return results
 
     def _daily_returns(

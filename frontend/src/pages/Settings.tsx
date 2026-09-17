@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { Link } from 'react-router-dom';
 
 import { Empty, ErrorBox, Section, Spinner, Stat } from '../components/ui';
 import { api, clearToken, type AppConfig } from '../lib/api';
@@ -464,6 +465,28 @@ export default function Settings({ onSignedOut }: { onSignedOut: () => void }) {
           >
             Retry failed push
           </button>
+        </div>
+      </Section>
+
+      <Section title="Digest">
+        <div className="card space-y-2">
+          <p className="text-xs text-muted">
+            The digest is delivered at your local digest hour, in the timezone set above. It goes
+            to the notification centre first; email and push are additional channels you can
+            enable under Notifications.
+          </p>
+          <div className="flex flex-wrap gap-2">
+            <button
+              className="btn"
+              disabled={busy}
+              onClick={() => runOperation('/digest/send', 'Send digest now')}
+            >
+              Send digest now
+            </button>
+            <Link to="/data-quality" className="btn">
+              Data quality &amp; cost
+            </Link>
+          </div>
         </div>
       </Section>
 

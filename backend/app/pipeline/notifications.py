@@ -17,7 +17,7 @@ import logging
 from dataclasses import dataclass
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
@@ -212,12 +212,52 @@ def create_notification(
 # --------------------------------------------------------------------------
 # Rule evaluation
 # --------------------------------------------------------------------------
-def _matches_new_event_rule(rule: AlertRule, event: Event, tickers: list[str]) -> str | None:
+def event_matches_search(db: Session, event: Event, query: str) -> bool:
+    """Does this event match a saved search?
+
+    Uses the same full-text expression as GET /api/search, so an alert created
+    from a search fires on exactly the events that search would have returned.
+    Re-implementing the matching with `in` would quietly diverge the moment
+    someone used a phrase or a negation.
+    """
+    if not query or not query.strip():
+        return False
+    sql = text(
+        """
+        SELECT 1
+        FROM events e
+        WHERE e.id = :event_id
+          AND to_tsvector('english',
+                coalesce(e.title, '') || ' ' || coalesce(e.text, '')
+                || ' ' || coalesce(e.source_key, '')
+              ) @@ websearch_to_tsquery('english', :query)
+        LIMIT 1
+        """
+    )
+    try:
+        return db.execute(sql, {"event_id": event.id, "query": query}).first() is not None
+    except Exception as exc:
+        # A malformed saved query must not take down rule evaluation for
+        # every other rule this user has.
+        log.warning("saved search %r failed to evaluate: %s", query[:60], exc)
+        return False
+
+
+def _matches_new_event_rule(
+    rule: AlertRule, event: Event, tickers: list[str], db: Session | None = None
+) -> str | None:
     """Returns the matched condition string, or None."""
     blob = f"{event.title or ''} {event.text}".lower()
     if rule.sources and event.source_key not in rule.sources:
         return None
     if rule.event_types and event.event_type not in rule.event_types:
+        return None
+
+    # A saved search is the most specific intent the user expressed, so it wins
+    # over the keyword list that was derived from it.
+    if rule.search_query and db is not None:
+        if event_matches_search(db, event, rule.search_query):
+            return f"search:{rule.search_query[:80]}"
         return None
 
     if rule.tickers:
@@ -272,7 +312,9 @@ def evaluate_event_rules(
             tickers_for_rule = (
                 event_tickers if rule.include_low_confidence_tickers else usable_tickers
             )
-            condition = _matches_new_event_rule(rule, event, [t.upper() for t in tickers_for_rule])
+            condition = _matches_new_event_rule(
+                rule, event, [t.upper() for t in tickers_for_rule], db
+            )
             if condition is None:
                 continue
             ticker = condition.split(":", 1)[1] if condition.startswith("ticker:") else None

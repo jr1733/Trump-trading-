@@ -91,6 +91,18 @@ def embed_job(db) -> dict:
     return {"embedded": written, "provider": service.provider.name}
 
 
+def digest_job(db) -> dict:
+    """Send digests to users whose local digest hour it is.
+
+    Runs every 10 minutes and decides per user, rather than on a cron at a fixed
+    UTC hour: "07:00 daily" has to mean 07:00 where the user is. The idempotency
+    key carries the local date, so a restart inside the hour cannot double-send.
+    """
+    from ..pipeline.digest import run_due_digests
+
+    return run_due_digests(db)
+
+
 def push_retry_job(db) -> dict:
     """Retry due push deliveries, then prune long-dead subscriptions."""
     from ..pipeline.push import cleanup_expired_subscriptions, retry_failed_deliveries
@@ -151,6 +163,14 @@ def build_scheduler() -> BackgroundScheduler:
         "interval",
         minutes=2,
         id="push_retry",
+        max_instances=1,
+        coalesce=True,
+    )
+    scheduler.add_job(
+        lambda: _run_job("digest", digest_job),
+        "interval",
+        minutes=10,
+        id="digest",
         max_instances=1,
         coalesce=True,
     )
