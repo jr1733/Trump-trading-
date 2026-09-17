@@ -364,6 +364,42 @@ def data_quality(db: Session = Depends(get_db), _: User = Depends(current_user))
         ).where(LLMUsage.created_at >= since)
     ).one()
 
+    # Per-source volume and the model spend attributable to it. A high-volume
+    # source that is mostly noise -- Congress is the one built to be -- shows up
+    # here as a lot of events for very little spend if its gate is working, and
+    # as a lot of spend if it is not. `llm_usage` has no source column, so the
+    # attribution is a join through the event; calls not tied to an event (there
+    # are none today) would simply not appear.
+    by_source = db.execute(
+        select(
+            Event.source_key,
+            func.count(func.distinct(Event.id)).label("events"),
+            func.count(func.distinct(Event.id)).filter(Event.relevant.is_(True)).label("relevant"),
+        )
+        .where(Event.ingestion_timestamp >= since)
+        .group_by(Event.source_key)
+    ).all()
+
+    spend_by_source = dict(
+        db.execute(
+            select(
+                Event.source_key,
+                func.coalesce(func.sum(LLMUsage.estimated_cost_usd), 0.0),
+            )
+            .join(Event, Event.id == LLMUsage.event_id)
+            .where(LLMUsage.created_at >= since)
+            .group_by(Event.source_key)
+        ).all()
+    )
+    calls_by_source = dict(
+        db.execute(
+            select(Event.source_key, func.count(LLMUsage.id))
+            .join(Event, Event.id == LLMUsage.event_id)
+            .where(LLMUsage.created_at >= since)
+            .group_by(Event.source_key)
+        ).all()
+    )
+
     embedded = int(
         db.execute(
             select(func.count(EventEmbedding.event_id)).where(
@@ -419,6 +455,21 @@ def data_quality(db: Session = Depends(get_db), _: User = Depends(current_user))
             "estimated_cost_usd": round(float(usage[3]), 4),
             "daily_call_budget": settings.llm_daily_call_budget,
         },
+        "by_source_7d": sorted(
+            (
+                {
+                    "source": row.source_key,
+                    "events": int(row.events),
+                    "relevant": int(row.relevant or 0),
+                    "model_calls": int(calls_by_source.get(row.source_key, 0)),
+                    "estimated_cost_usd": round(
+                        float(spend_by_source.get(row.source_key, 0.0)), 4
+                    ),
+                }
+                for row in by_source
+            ),
+            key=lambda r: (-r["events"], r["source"]),
+        ),
     }
 
 

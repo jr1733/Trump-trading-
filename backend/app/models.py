@@ -27,6 +27,7 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    true as sa_true,
 )
 from pgvector.sqlalchemy import Vector
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB
@@ -467,6 +468,11 @@ class NotificationPreference(Base):
     max_per_hour: Mapped[int] = mapped_column(Integer, default=30)
     digest_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     digest_hour_local: Mapped[int] = mapped_column(Integer, default=7)
+    # A digest is scheduled, not interruptive, so by default it is delivered
+    # even inside quiet hours. Set false if quiet hours mean nothing at all.
+    digest_ignores_quiet_hours: Mapped[bool] = mapped_column(
+        Boolean, default=True, server_default=sa_true()
+    )
     updated_at: Mapped[dt.datetime] = mapped_column(TS, default=utcnow, onupdate=utcnow)
 
 

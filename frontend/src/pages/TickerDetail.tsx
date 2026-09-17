@@ -3,7 +3,15 @@ import { useParams } from 'react-router-dom';
 
 import EventStudy from '../components/EventStudy';
 import WhyPanel from '../components/WhyPanel';
-import { Disclaimer, Empty, ErrorBox, Section, Spinner, Stat } from '../components/ui';
+import {
+  Disclaimer,
+  Empty,
+  ErrorBox,
+  MockBadge,
+  Section,
+  Spinner,
+  Stat,
+} from '../components/ui';
 import { api, type HorizonStat, type Signal } from '../lib/api';
 import { horizonLabel, labelColour, localTime, num, pct, signed, titleCase } from '../lib/format';
 import { useApi } from '../lib/useApi';
@@ -163,6 +171,9 @@ export default function TickerDetail() {
           {chart.data && (
             <>
               <Sparkline series={chart.data.series.map((p) => p.close)} anchorIndex={anchorIndex} />
+              <div className="mt-1 flex items-center gap-2">
+                <MockBadge kind="market" />
+              </div>
               <p className="mt-1 text-[11px] text-muted">
                 Provider: {data.provider}
                 {data.supports_intraday ? '' : ' (daily bars only — intraday horizons unavailable)'}

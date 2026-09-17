@@ -137,6 +137,22 @@ class Settings(BaseSettings):
     # Sample-size gates from the spec.
     min_reliable_sample: int = 20
     min_usable_sample: int = 10
+    # Below `min_usable_sample` the score is sentiment-only and capped here, so
+    # a text reading with no comparable history cannot reach a STRONG label
+    # (|0.6|). Keep this below signal_threshold_strong_bull or the cap does
+    # nothing.
+    signal_text_only_cap: float = 0.4
+    # Congress moves hundreds of bills a week. Its adapter applies its own
+    # keyword gate before anything is stored, stricter than the pipeline's 0.3.
+    congress_relevance_threshold: float = 0.5
+    # An item scoring below this is not escalated to cheap-model triage. The
+    # escalation exists for *borderline* items; paying a model call to confirm
+    # that a post-office naming is irrelevant is the cost leak it was meant to
+    # prevent. Set to 0.0 to triage everything that fails the rule gate.
+    triage_relevance_floor: float = 0.15
+    # Unreliable-sample signals never raise a threshold alert. Set false only if
+    # you want to be woken by a score computed from text alone.
+    alerts_require_usable_sample: bool = True
     # Which horizon drives the signal when several are available.
     signal_primary_horizon: str = "1d"
 

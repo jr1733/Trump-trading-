@@ -26,9 +26,22 @@ the "Why?" panel shows each computed value:
   cannot produce a strong label.
 * **sample-size factor** -- `0.0` when the sample is unreliable (N < 10, so the
   historical terms get **zero weight** as the spec requires), `0.6` when limited
-  (10 <= N < 20), `1.0` at N >= 20. When N < 10 the historical and consistency
-  components are dropped and their weight is redistributed to the remaining
-  components rather than silently shrinking the score.
+  (10 <= N < 20), `1.0` at N >= 20.
+
+**Text-only mode (N < 10).** When the historical sample is unreliable the score
+collapses to *sentiment alone*, capped in magnitude at `SIGNAL_TEXT_ONLY_CAP`
+(default 0.4).
+
+Novelty is dropped along with the historical terms, and this is the point of the
+rule rather than an oversight. Novelty is defined as an amplifier of an existing
+lean, and with no usable history the only thing left to lean on is the model's
+reading of the text -- so letting novelty through would amplify a text reading
+with itself and dress up one opinion as two agreeing components. The cap exists
+for the same reason: with no comparable past events, a confident-sounding
+sentence is the entire basis for the number, and a basis that thin must not be
+able to produce a STRONGLY BULLISH or STRONGLY BEARISH label (|0.6|). Such
+signals are also excluded from firing threshold alerts -- see
+`pipeline.notifications.evaluate_threshold_crossing`.
 
 Market context is deliberately absent in Phase 1.
 """
@@ -140,11 +153,19 @@ def compute_signal(
             "the historical and consistency components are given zero weight."
         )
 
-    # Novelty amplifies the existing lean; it never creates one.
-    directional = [components.get("sentiment", 0.0), components.get("historical", 0.0)]
-    lean = sum(directional)
-    novelty_sign = 1.0 if lean > 0 else (-1.0 if lean < 0 else 0.0)
-    components["novelty"] = round(_clamp(novelty_value * novelty_sign), 4)
+    if historical_usable:
+        # Novelty amplifies the existing lean; it never creates one.
+        directional = [components.get("sentiment", 0.0), components.get("historical", 0.0)]
+        lean = sum(directional)
+        novelty_sign = 1.0 if lean > 0 else (-1.0 if lean < 0 else 0.0)
+        components["novelty"] = round(_clamp(novelty_value * novelty_sign), 4)
+    else:
+        # Text-only mode: novelty would amplify the sentiment reading with
+        # itself, presenting one opinion as two agreeing components.
+        notes.append(
+            "Novelty is also dropped: with no usable history it would only "
+            "amplify the text reading with itself."
+        )
 
     active = {k: w for k, w in weights.items() if k in components}
     total_weight = sum(active.values()) or 1.0
@@ -154,16 +175,31 @@ def compute_signal(
     base = sum(contributions.values())
     score = _clamp(base * _clamp(model_confidence, 0.0, 1.0) * (size_factor if historical_usable else 1.0))
 
+    if not historical_usable:
+        # The whole number rests on one reading of one piece of text. Cap it so
+        # it cannot reach a STRONG label on that basis alone.
+        cap = settings.signal_text_only_cap
+        if abs(score) > cap:
+            score = cap if score > 0 else -cap
+            notes.append(
+                f"Score capped at {cap:+.2f} because it rests on the text reading "
+                "alone. A text reading with no comparable history cannot produce a "
+                "strong label."
+            )
+
     # --- mandatory uncertainties -----------------------------------------
     if n == 0:
         uncertainties.append(
             "No comparable past events were found. This score rests on the text "
-            "reading alone."
+            f"reading alone, is capped at {settings.signal_text_only_cap:.2f}, and "
+            "cannot raise a threshold alert."
         )
     elif flag == "unreliable":
         uncertainties.append(
             f"Only {n} comparable past events (fewer than {settings.min_usable_sample}); "
-            "the historical statistics are shown but carry no weight in the score."
+            "the historical statistics are shown but carry no weight in the score. "
+            f"The score is capped at {settings.signal_text_only_cap:.2f} and cannot "
+            "raise a threshold alert."
         )
     elif flag == "limited":
         uncertainties.append(

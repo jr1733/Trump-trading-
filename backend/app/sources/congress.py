@@ -12,10 +12,19 @@ We poll two things and treat them as separate events, because they are:
   are not the same event and must not deduplicate into each other, so the
   external id includes the action date.
 
-Filtering by subject, sponsor and committee is available on the API, but a
-keyword filter is applied here as well, because the bulk of congressional
-activity has no market relevance and the point of the relevance gate is to keep
-it out of the pipeline.
+**A keyword filter runs here, in the adapter, before anything is stored.** This
+is the one source where that matters: Congress moves hundreds of bills a week,
+almost none of them market-relevant, and a bill that enters the pipeline and
+*fails* the relevance gate still costs a triage call to find that out. Filtering
+at the adapter means a post-office naming never becomes a raw event, never
+becomes an event, and never reaches a model. It reuses the pipeline's own
+`score_relevance` rather than a second keyword list, because two lists drift
+apart and then the UI explains a decision using terms the filter no longer uses.
+
+The threshold here (`CONGRESS_RELEVANCE_THRESHOLD`, default 0.5) is deliberately
+stricter than the pipeline's 0.3. The pipeline gate is permissive on purpose --
+a borderline presidential statement is worth a second look. A borderline bill,
+out of the ~10,000 introduced per Congress, is not.
 """
 
 from __future__ import annotations
@@ -24,6 +33,11 @@ import datetime as dt
 import logging
 
 from ..config import settings
+# Layering note: `sources` importing from `pipeline` is the one exception in
+# this package, and it is a deliberate one. `pipeline.relevance` is pure
+# functions over strings -- no session, no models, no I/O -- and sharing it is
+# what keeps the adapter's filter and the pipeline's gate using the same words.
+from ..pipeline.relevance import score_relevance
 from . import http
 from .base import RawItem, SourceAdapter
 
@@ -46,10 +60,19 @@ class CongressAdapter(SourceAdapter):
         api_key: str | None = None,
         lookback_days: int = 3,
         limit: int = 50,
+        relevance_threshold: float | None = None,
     ) -> None:
         self.api_key = api_key if api_key is not None else settings.congress_api_key
         self.lookback_days = lookback_days
         self.limit = limit
+        self.relevance_threshold = (
+            settings.congress_relevance_threshold
+            if relevance_threshold is None
+            else relevance_threshold
+        )
+        #: Bills rejected by the keyword filter on the last fetch. Reported by
+        #: the poller so the filter's effect is visible instead of silent.
+        self.filtered_out = 0
 
     def enabled(self) -> bool:
         # No key is a configuration state, not a failure. Saying so lets the
@@ -63,6 +86,7 @@ class CongressAdapter(SourceAdapter):
         since = dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=self.lookback_days)
         items: list[RawItem] = []
         errors: list[str] = []
+        self.filtered_out = 0
 
         for bill_type in BILL_TYPES:
             try:
@@ -116,6 +140,15 @@ class CongressAdapter(SourceAdapter):
         label = f"{bill_type.upper()} {number}"
         text = f"{title}. Latest action: {action_text}" if action_text else title
 
+        # The gate, before the bill becomes anything at all. Note this runs on
+        # the bill's own words only -- nothing here calls a model, and nothing
+        # that fails here can go on to cost a triage call.
+        verdict = score_relevance(text, label, threshold=self.relevance_threshold)
+        if not verdict.relevant:
+            self.filtered_out += 1
+            log.debug("congress: filtered %s (%s)", label, verdict.reason)
+            return None
+
         return RawItem(
             source_key=self.key,
             # The action date is part of the id on purpose: a bill that moves
@@ -132,6 +165,9 @@ class CongressAdapter(SourceAdapter):
                 "congress": bill.get("congress"),
                 "latest_action": action,
                 "origin_chamber": bill.get("originChamber"),
+                # Carried through so the UI can show why this bill was kept.
+                "relevance_score": verdict.score,
+                "relevance_reason": verdict.reason,
                 "raw": bill,
             },
         )

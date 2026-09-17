@@ -17,6 +17,7 @@ interface Preferences {
   max_per_hour: number;
   digest_enabled: boolean;
   digest_hour_local: number;
+  digest_ignores_quiet_hours: boolean;
   in_quiet_hours_now: boolean;
 }
 
@@ -337,6 +338,26 @@ export default function Settings({ onSignedOut }: { onSignedOut: () => void }) {
                 />
               </div>
             </div>
+
+            <label className="flex items-start gap-2 text-sm">
+              <input
+                type="checkbox"
+                className="mt-0.5"
+                checked={draft.digest_ignores_quiet_hours}
+                onChange={(event) =>
+                  setDraft({ ...draft, digest_ignores_quiet_hours: event.target.checked })
+                }
+              />
+              <span>
+                Deliver the digest during quiet hours
+                <span className="mt-0.5 block text-[11px] text-muted">
+                  On by default: a digest is something you scheduled, not an interruption, so
+                  it arrives at your digest hour even if that falls inside quiet hours. Turn
+                  this off to make quiet hours absolute — the digest is then held, and the
+                  window it covers is not re-sent later.
+                </span>
+              </span>
+            </label>
 
             <label className="flex items-center gap-2 text-sm">
               <input

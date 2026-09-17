@@ -21,6 +21,7 @@ from sqlalchemy import func, select, text
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
+from ..config import settings
 from ..models import (
     AlertRule,
     Event,
@@ -387,6 +388,13 @@ def evaluate_threshold_crossing(
     if signal.confidence < rule.min_confidence:
         return None
     if signal.sample_size < rule.min_sample_size:
+        return None
+    # A hard floor above whatever the rule asks for. Below `min_usable_sample`
+    # the score is sentiment-only and capped (see pipeline.signals), which makes
+    # it a reading of one piece of text rather than a measured association --
+    # not a thing to wake someone up for. The rule can raise this bar but not
+    # lower it.
+    if settings.alerts_require_usable_sample and signal.sample_size < settings.min_usable_sample:
         return None
 
     bull = rule.bullish_threshold

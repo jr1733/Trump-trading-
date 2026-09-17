@@ -1,6 +1,14 @@
 import { FormEvent, useState } from 'react';
 
-import { Disclaimer, Empty, ErrorBox, SampleFlag, Section, Spinner } from '../components/ui';
+import {
+  Disclaimer,
+  Empty,
+  ErrorBox,
+  MockBadge,
+  SampleFlag,
+  Section,
+  Spinner,
+} from '../components/ui';
 import { api } from '../lib/api';
 import { num, pct } from '../lib/format';
 
@@ -31,6 +39,7 @@ interface BacktestBody {
   overall: MetricBlock;
   by_split: Record<string, SplitBlock>;
   skipped_count: number;
+  dropped_overlapping: number;
   llm_contaminated: boolean;
   notes: string[];
   warnings: string[];
@@ -72,6 +81,7 @@ export default function Backtest() {
   const [minSignal, setMinSignal] = useState(0.2);
   const [holdingDays, setHoldingDays] = useState(5);
   const [sentimentMode, setSentimentMode] = useState<'rule_based' | 'llm'>('rule_based');
+  const [nonOverlapping, setNonOverlapping] = useState(false);
 
   const [result, setResult] = useState<BacktestBody | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -90,6 +100,7 @@ export default function Backtest() {
         min_signal: minSignal,
         holding_days: holdingDays,
         sentiment_mode: sentimentMode,
+        non_overlapping_only: nonOverlapping,
       });
       setResult(body);
     } catch (err) {
@@ -202,6 +213,35 @@ export default function Backtest() {
                 ? 'No language model is involved, so there is no training-data contamination.'
                 : 'The model may already know what followed these events. Results carry a contamination label.'}
             </p>
+            {sentimentMode === 'rule_based' && (
+              <p className="mt-1 text-[11px] leading-relaxed text-warn">
+                It is not hindsight-free, though. The keyword lists and weights were written
+                in 2026, by someone who already knew which topics moved markets over the
+                period being scored, and were revised while looking at this app's output. A
+                fixed word list cannot recall a specific event the way a language model can,
+                so this is the weaker leak of the two &mdash; but rule-based is the{' '}
+                <em>cleaner</em> mode, not a clean one.
+              </p>
+            )}
+          </div>
+
+          <div>
+            <label className="flex items-start gap-2 text-xs text-gray-300">
+              <input
+                type="checkbox"
+                className="mt-0.5"
+                checked={nonOverlapping}
+                onChange={(e) => setNonOverlapping(e.target.checked)}
+              />
+              <span>
+                Non-overlapping windows only
+                <span className="mt-0.5 block text-[11px] text-muted">
+                  Keeps a chronological set whose holding periods never share a session, so
+                  the same stretch of calendar is not counted twice. Expect N to fall
+                  sharply &mdash; that smaller number is the independent one.
+                </span>
+              </span>
+            </label>
           </div>
 
           <button className="btn-primary w-full" disabled={loading}>
@@ -242,12 +282,18 @@ export default function Backtest() {
               <div className="card">
                 <div className="mb-2 flex flex-wrap items-center gap-2">
                   <SampleFlag flag={result.overall.flag} n={result.overall.n} />
+                  <MockBadge kind="market" />
                   <span className="chip bg-edge text-muted">
                     {result.overall.long_count} long-direction / {result.overall.short_count} short
                   </span>
                   <span className="chip bg-edge text-muted">
                     {num(result.overall.overlap_fraction * 100, 0)}% overlapping windows
                   </span>
+                  {result.dropped_overlapping > 0 && (
+                    <span className="chip bg-edge text-muted">
+                      {result.dropped_overlapping} dropped as overlapping
+                    </span>
+                  )}
                 </div>
 
                 {/* Eight columns do not fit a phone. Rather than hide three of

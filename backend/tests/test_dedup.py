@@ -76,3 +76,51 @@ def test_upsert_event_returns_existing_row_on_conflict(db):
     db.commit()
     assert created_again is False
     assert again.id == event.id
+
+
+# --- the triage floor -----------------------------------------------------
+def test_an_obviously_irrelevant_item_is_not_escalated_to_a_model(db, monkeypatch):
+    """Triage exists for *borderline* items. Paying a model call to confirm that
+    a golf post is irrelevant is the cost leak the rule gate exists to plug."""
+    from app.config import settings
+    from app.llm.client import AnthropicClient
+    from app.market.service import MarketDataService
+    from app.pipeline import analysis as analysis_mod
+    from app.pipeline.runner import run_pipeline
+    from app.sources.registry import store_raw_items
+
+    calls: list[str] = []
+    monkeypatch.setattr(
+        analysis_mod, "triage_event", lambda db, event, client=None: calls.append(event.id) or False
+    )
+
+    store_raw_items(db, [item("golf-1", "Played a wonderful round of golf today.")])
+    db.commit()
+    run_pipeline(db, client=AnthropicClient(client=None), market=MarketDataService(db))
+    db.commit()
+
+    assert calls == [], "nothing that matched no market term should reach triage"
+    assert settings.triage_relevance_floor > 0.0
+
+
+def test_a_borderline_item_is_still_escalated(db, monkeypatch):
+    from app.llm.client import AnthropicClient
+    from app.market.service import MarketDataService
+    from app.pipeline import analysis as analysis_mod
+    from app.pipeline.runner import run_pipeline
+    from app.sources.registry import store_raw_items
+
+    calls: list[str] = []
+    monkeypatch.setattr(
+        analysis_mod, "triage_event", lambda db, event, client=None: calls.append(event.id) or False
+    )
+
+    # A market-relevant term knocked below the gate by a negative one: scores
+    # 0.16, so the rule gate rejects it but it clears the 0.15 triage floor.
+    # This is exactly the ambiguous case the escalation exists for.
+    store_raw_items(db, [item("imm-1", "Remarks on immigration at the rally schedule event.")])
+    db.commit()
+    run_pipeline(db, client=AnthropicClient(client=None), market=MarketDataService(db))
+    db.commit()
+
+    assert len(calls) == 1

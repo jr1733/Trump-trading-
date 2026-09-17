@@ -128,6 +128,9 @@ class PreferencesIn(BaseModel):
     max_per_hour: int = Field(default=30, ge=1, le=1000)
     digest_enabled: bool = True
     digest_hour_local: int = Field(default=7, ge=0, le=23)
+    #: A digest is scheduled rather than interruptive, so it is delivered inside
+    #: quiet hours by default. False makes quiet hours absolute.
+    digest_ignores_quiet_hours: bool = True
 
     @field_validator("timezone")
     @classmethod
@@ -197,6 +200,10 @@ class BacktestIn(BaseModel):
     holding_days: int = Field(default=5, ge=1, le=60)
     sentiment_mode: Literal["rule_based", "llm"] = "rule_based"
     include_low_confidence: bool = False
+    #: Keep only non-overlapping holding windows. Off by default because it can
+    #: cut N by an order of magnitude, which is a choice the reader should make
+    #: knowingly rather than discover.
+    non_overlapping_only: bool = False
     train_fraction: float = Field(default=0.6, gt=0.0, lt=1.0)
     validation_fraction: float = Field(default=0.2, ge=0.0, lt=1.0)
 

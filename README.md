@@ -77,7 +77,25 @@ or notification — there is an end-to-end test that asserts exactly this.
 | **Event detail** | The full text, the model's fact/position/claim/speculation split, the signal, provenance timestamps, and the **similar past events** list with what each one was followed by. |
 | **Settings** | Notification permission and push status, quiet hours, thresholds, digest settings, a test-notification button, source health, the live signal weights and embedding measure, and manual poll/pipeline/seed/embed/push-retry triggers. |
 | **Backtest** | Run a point-in-time backtest over any window: pick tickers, event type, signal threshold, holding period, and rule-based or model sentiment. Chronological train/validation/test splits, mean/median/win-rate/SD/max-drawdown/Sharpe, overlap fraction, and a contamination banner when the model scored it. |
-| **Data quality & cost** (`/data-quality`) | Pipeline backlog, missing embeddings, duplicate hashes, future timestamps, ticker-match confidence, market-data staleness, stale sources, malformed model output, processing errors, failed deliveries, recent worker jobs, and seven days of model spend extrapolated to a monthly figure. Reached from Settings. |
+| **Data quality & cost** (`/data-quality`) | Pipeline backlog, missing embeddings, duplicate hashes, future timestamps, ticker-match confidence, market-data staleness, stale sources, malformed model output, processing errors, failed deliveries, recent worker jobs, seven days of model spend extrapolated to a monthly figure, and **per-source volume and attributed spend** so a high-volume source whose gate has stopped working is visible as spend rather than discovered on an invoice. Reached from Settings. |
+
+---
+
+## Demo data is labelled as demo data
+
+Out of the box every price is synthetic (`MARKET_DATA_PROVIDER=mock`) and every analysis is
+canned (`LLM_FAKE_MODE=true`). Those numbers look exactly like real ones — same decimals, same
+red and green, same confident little percentages — so the app says so rather than letting you
+find out:
+
+- a **DEMO DATA — not real market data** banner sits above every page while either is mocked;
+- a `MOCK PRICES` / `MOCK ANALYSIS` chip appears next to the price chart, the backtest results
+  and anywhere else a mocked number is the subject;
+- Settings names the active market provider and embedding measure;
+- analyses carry the model name `canned-mock` everywhere they are shown.
+
+Both banners disappear on their own once you set a real provider and key — there is no flag to
+remember to turn off.
 
 ---
 
@@ -100,7 +118,7 @@ score = score × model_confidence × sample_size_factor
 | **consistency** | How one-sided the sample is, signed by the median's direction: `2·max(pos%, neg%)/100 − 1`. A 50/50 split contributes 0; a 90/10 split contributes ±0.8. |
 | **novelty** | `1 − max_similarity_to_the_last_30_days`, **signed in the direction the other components already point**. Novelty has no direction of its own: a novel event is not bullish, merely less anticipated, so it can only amplify an existing lean, never create one. |
 | **model confidence** | Multiplies the whole score. A 0.3-confidence reading cannot produce a strong label. |
-| **sample-size factor** | `0.0` below N=10, `0.6` for N=10–19, `1.0` at N≥20. Below N=10 the historical and consistency components are **dropped entirely and their weight redistributed**, rather than silently shrinking the score. |
+| **sample-size factor** | `0.0` below N=10, `0.6` for N=10–19, `1.0` at N≥20. Below N=10 the score drops into **text-only mode** — see [Sample-size honesty](#sample-size-honesty). |
 
 Weights are renormalised over whichever components are active, so they always sum to 1. Market
 context is deliberately omitted in Phase 1.
@@ -121,9 +139,22 @@ reminder that association is not causation.
 
 | N | Flag | Effect |
 |---|---|---|
-| < 10 | **unreliable** | Shown in the UI in red, given **zero weight** in the score. |
+| < 10 | **unreliable** | Shown in red. **Text-only mode**: historical, consistency *and* novelty are all dropped, the score is sentiment alone capped at `SIGNAL_TEXT_ONLY_CAP` (0.4), and it **cannot raise a threshold alert**. |
 | 10–19 | **limited** | Shown in amber, score scaled by 0.6. |
 | ≥ 20 | ok | Full weight. |
+
+**Why novelty goes too.** Novelty is defined as an amplifier of an existing lean. With no usable
+history the only thing left to lean on is the model's reading of the text, so letting novelty
+through would amplify that reading with itself and present one opinion as two agreeing
+components.
+
+**Why the cap.** With no comparable past events, a confident-sounding sentence is the entire
+basis for the number. A basis that thin must not be able to print STRONGLY BULLISH. The cap is a
+ceiling, never a floor: a weak reading still scores weakly.
+
+**Why no alert.** `ALERTS_REQUIRE_USABLE_SAMPLE` (default true) is a hard floor underneath every
+alert rule. An individual rule's `min_sample_size` can raise the bar but not lower it. A score
+computed from one piece of text is not a thing to be woken up for.
 
 ---
 
@@ -234,12 +265,49 @@ over `holding_days` sessions from the reaction day, aligned to the signal's dire
 
 | Mode | What it uses | Contamination |
 |---|---|---|
-| `rule_based` *(default)* | A fixed lexicon. No model call, no network. | None. This is the clean comparison. |
+| `rule_based` *(default)* | A fixed lexicon. No model call, no network. | **Weaker, not absent.** See below. |
 | `llm` | The stored model analysis for each event. | **Labelled contaminated.** The model may already know what followed. Treat it as an upper bound, not a measurement. |
 
-**Splits are chronological.** The window is cut into train (first 60%), validation (next 20%) and
-test (last 20%) *by date*. Random k-fold on a time series lets the future inform the past and is
-never offered, not even as an option.
+⚠️ **The rule-based mode is the cleaner one, not a clean one.** Its keyword lists and weights
+(`backend/app/pipeline/relevance.py`) were written in 2026 by someone who already knew which
+topics moved markets over the period being scored, and were revised while looking at this app's
+own output. That is hindsight, and it is in the lexicon. It is a weaker and less specific leak
+than a language model's — a fixed word list cannot recall a *particular* event the way a model
+can — but calling it contamination-free would be the exact over-claim this feature exists to
+avoid. The backtest page and every result's notes say so.
+
+**`non_overlapping_only`** (default false) keeps a greedy chronological set whose holding windows
+never share a session, so the same stretch of calendar is never counted twice. After it,
+`overlap_fraction` is 0.0 by construction. The comparison is global rather than per-ticker: two
+different tickers over the same week are still mostly the same market move. Expect N to fall
+hard — on the bundled demo data, 87 observations become 40, and the Sharpe halves from −1.15 to
+−0.57. That second number is the honest one.
+
+### What the train/validation/test splits are for
+
+The window is cut into train (first 60%), validation (next 20%) and test (last 20%) **by date**.
+Random k-fold on a time series lets the future inform the past, so it is not offered at all.
+
+**Nothing in this codebase is fitted.** The signal weights, thresholds, return scale and sample
+gates are all static configuration read from environment variables; `point_in_time_signal` reads
+`settings.signal_weights()` and the backtest never writes back to it. There is no optimiser, no
+grid search and no parameter that the backtest chooses. So the three splits are not there because
+the tool is learning something — they exist for **you**, as a discipline for when you tune those
+env vars by hand:
+
+1. **Train** — the only split you may look at while changing weights, thresholds or the holding
+   period. Iterate here as much as you like.
+2. **Validation** — check a candidate configuration once you think you have one. If it disagrees
+   with train, you overfitted train; go back.
+3. **Test** — look **once**, at the end, and report whatever it says. Every extra look at test
+   turns it into another validation split, and you no longer have an out-of-sample estimate at
+   all.
+
+The per-split table exists so that the train number and the test number are never quotable as the
+same thing. If you tune anything, tune it against the train column and report the test column
+beside it. The bundled demo data shows why this matters: train runs −0.72% mean while test runs
++2.11%, on N=42 and N=7 respectively. Neither number means anything at those sample sizes, and a
+single headline figure would have hidden that they disagree.
 
 **What the numbers mean — and do not mean.** Mean, median, win rate, SD, max drawdown (on the
 cumulative sum of observations), best and worst are reported per split. Sharpe is annualised but
@@ -254,6 +322,37 @@ measures the mock provider and nothing else.
 
 ---
 
+## Verifying sources against the real internet
+
+**No feed URL and no Stooq symbol in this repository has been confirmed against the live
+service.** The build environment had no outbound access to government or market hosts, so every
+one of them is a plausible guess. This is the script that finds out which guesses were wrong:
+
+```bash
+make verify-sources                              # ENABLED_SOURCES + market data
+make verify-sources ARGS="--all-sources -v"      # every adapter, with samples
+make verify-sources ARGS="--market-only"         # just the price provider
+MARKET_DATA_PROVIDER=stooq make verify-sources ARGS="--market-only"
+```
+
+It calls each adapter directly, counts what comes back, and writes nothing to the database. Exit
+status is 0 when everything *configured to run* works, so it is usable as a post-deploy smoke
+test or in CI.
+
+| State | Meaning | Fatal? |
+|---|---|---|
+| `OK` | Items returned, newest one's age reported. | no |
+| `NEEDS KEY` | Implemented, no key configured (Congress). | no — configuration, not breakage |
+| `MANUAL ONLY` | No API exists to call (Truth Social, OGE). | no |
+| `EMPTY` | **Reachable but returned nothing.** Usually a feed that moved: the URL still serves a page, it just is not the feed any more. | **yes** |
+| `FAILED` | Unreachable, or the response was unusable. | **yes** |
+
+`EMPTY` is the state worth caring about — it is the failure that otherwise hides for weeks.
+
+Run this first on the VPS, before trusting anything the app shows you.
+
+---
+
 ## Data sources
 
 | Source | Status | Notes |
@@ -263,7 +362,7 @@ measures the mock provider and nothing else.
 | **Federal Register** | ✅ implemented | Official, free, **no API key**. The authoritative record for executive orders and proclamations. Lags the press release by hours to days, so it backstops rather than races. |
 | **News RSS** | ✅ implemented | Configurable feeds. **Headline, publication, author, timestamp, URL and a short summary only** — full article text is never stored, and the truncation is enforced at ingestion. |
 | **Truth Social** | ⛔ **manual import only** | No official public API, and the terms of service prohibit unauthorised automated access. We ship the adapter interface, a mock, and a CSV/JSON importer — and refuse to scrape. See [`docs/PHASE0_FEASIBILITY.md`](docs/PHASE0_FEASIBILITY.md) §1.1. |
-| **Congress.gov** | ✅ implemented | Official free API. Needs a free `CONGRESS_API_KEY`; without one the adapter reports `NEEDS_KEY` and polls nothing rather than erroring. A bill's *latest action date* is part of its identity, so a bill that moves is a new event rather than a duplicate of its introduction. |
+| **Congress.gov** | ✅ implemented | Official free API. Needs a free `CONGRESS_API_KEY`; without one the adapter reports `NEEDS_KEY` and polls nothing rather than erroring. A bill's *latest action date* is part of its identity, so a bill that moves is a new event rather than a duplicate of its introduction. **Bills are keyword-gated inside the adapter, before anything is stored** (`CONGRESS_RELEVANCE_THRESHOLD`, default 0.5 — stricter than the pipeline's 0.3). Congress moves hundreds of bills a week and a bill that enters the pipeline and then fails the relevance gate still costs a triage call to find that out. |
 | **OGE** | ⛔ **manual import only** | OGE publishes filings as documents, not as an API. The adapter stores only what a filing itself lists — filing date, individual, form type, listed entities, source URL, document reference — and carries a disclaimer field. There is **no** value, share-count or position field anywhere in the payload, so an undisclosed holding cannot be inferred even by accident. Point `OGE_FEED_URL` at a JSON index you maintain, or use the manual import. |
 
 Enable sources with `ENABLED_SOURCES=mock,whitehouse,federal_register,news_rss,congress`.
@@ -317,8 +416,15 @@ It fires at **each user's own local digest hour** (`digest_hour_local`, in their
 at a fixed UTC hour, so the schema stays correct if a second user in another timezone is ever
 added. The worker checks every hour and sends only what is due.
 
-Two deliberate exceptions: a digest **ignores quiet hours and the per-hour rate limit**. Both of
-those exist to suppress unsolicited interruptions, and a digest the user scheduled is not one.
+Two deliberate exceptions, which work differently from each other:
+
+- **Quiet hours** are ignored *by default, and that default is the user's to change.* The
+  `digest_ignores_quiet_hours` preference (Settings → Notifications, on by default) exists
+  because "quiet hours" can reasonably mean either "no interruptions" or "nothing at all, ever".
+  Turn it off and the digest is held; the window it covered is not re-sent later.
+- **The hourly rate limit never applies**, and this is not configurable. That cap exists to stop
+  a burst of alerts, and one scheduled summary is not a burst. A digest silently eaten by a rate
+  limit is the digest you most needed to see.
 
 Idempotency is per local *day* (per local *hour* for the opt-in `HOURLY_DIGEST_ENABLED` cadence),
 so a worker restart or a manual `POST /api/digest/send` cannot send the same digest twice.
@@ -447,7 +553,7 @@ Work down this list; each step rules out the one below it.
 make test            # or: cd backend && python -m pytest -q
 ```
 
-**368 tests, all passing.** They run against a real Postgres with pgvector (`trumpmarket_test`
+**394 tests, all passing.** They run against a real Postgres with pgvector (`trumpmarket_test`
 by default; override with `TEST_DATABASE_URL`) because the idempotency guarantees are enforced by
 database constraints and the similarity search is real SQL — testing either against a fake would
 test nothing. The suite drops every table it touches, so it refuses to start unless the database
@@ -467,6 +573,10 @@ recovery of a known β · abnormal returns isolating a known shock · an event s
 planted effect *and* correctly finds nothing when there is nothing.
 
 Phase 3 adds: point-in-time signal recomputation · chronological splits that never shuffle ·
+non-overlapping-window selection and the "no overlap remains" invariant · the text-only cap and
+its symmetry · the unreliable-sample alert floor and its override · the Congress keyword gate and
+that it is stricter than the pipeline's · the triage floor (an item matching no market term never
+reaches a model, a borderline one still does) · the digest quiet-hours preference ·
 max drawdown and the Sharpe sample floor · overlapping-window detection · the rule-based /
 LLM contamination label · digest scheduling in the user's own timezone · digest idempotency
 across local days and cadences · digests overriding quiet hours and rate limits by design ·
@@ -608,10 +718,12 @@ These are real and they do not have workarounds:
    through APNs and can be delayed or dropped by Low Power Mode, Focus modes or connectivity. A
    PWA on iOS **cannot poll in the background at all** — which is precisely why the worker is
    server-side. The in-app notification centre is the system of record; push is a convenience.
-7. **Unverified endpoints.** The build environment had no outbound network access to government
-   or market sites, so no live feed URL in this repository has been confirmed against the real
-   service. Every URL is configurable and every adapter fails into the health table by design —
-   but check Settings → Sources on first deployment. See `docs/PHASE0_FEASIBILITY.md`.
+7. **Unverified endpoints.** The build environment blocked outbound access to every government
+   and market host, so **no feed URL and no Stooq symbol in this repository has been confirmed
+   against the live service** — every one is a plausible guess. `make verify-sources` is the tool
+   for finding out which guesses were wrong; run it on the VPS before trusting anything the app
+   shows you. Every URL is configurable and every adapter fails into the health table by design.
+   See `docs/PHASE0_FEASIBILITY.md`.
 8. **LLM contamination in backtests.** A model's training data may contain knowledge of what
    followed a historical event, so an LLM-scored backtest can look predictive for reasons that
    have nothing to do with the signal. Backtesting therefore defaults to rule-based sentiment,
@@ -630,11 +742,15 @@ These are real and they do not have workarounds:
    events and daily bars, the honest answer is usually "no detectable effect". The UI says so
    rather than dressing up a t-statistic of 0.4.
 12. **Backtest results are not portfolio results.** No costs, spread, slippage, position sizing
-   or capital are modelled, holding windows overlap, and a backtest run over the mock provider
-   measures the mock provider. The numbers are signal-aligned price changes and nothing more.
+   or capital are modelled, and a backtest run over the mock provider measures the mock
+   provider. The numbers are signal-aligned price changes and nothing more.
 13. **OGE is manual.** There is no OGE API to poll, so filings arrive by import. The adapter is
    deliberately built so that undisclosed holdings *cannot* be represented — there is no value,
    share or position field to put them in.
+14. **The rule-based lexicon carries hindsight.** It was written in 2026 with knowledge of the
+   period it scores. Rule-based is the *cleaner* backtest mode, not a clean one, and the UI says
+   so on every run. There is no version of this that is contamination-free short of a word list
+   frozen before the sample period, which does not exist.
 
 ---
 
@@ -655,7 +771,7 @@ backend/
     worker/         APScheduler worker
     config.py  db.py  models.py  schemas.py  auth.py  main.py
   alembic/          migrations
-  tests/            368 tests, including the end-to-end test
+  tests/            394 tests, including the end-to-end test
   manage.py         operational CLI (seed, import, poll, pipeline, embed, status)
 frontend/
   src/              React + TypeScript pages, components, API client

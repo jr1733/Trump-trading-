@@ -13,6 +13,7 @@ import Backtest from './pages/Backtest';
 import DataQuality from './pages/DataQuality';
 import Settings from './pages/Settings';
 import { api, getToken } from './lib/api';
+import { MockDataBanner } from './components/ui';
 
 const NAV = [
   { to: '/', label: 'Live', icon: '◧' },
@@ -72,6 +73,8 @@ export default function App() {
           </NavLink>
         </div>
       </header>
+
+      <MockDataBanner />
 
       <main className="flex-1 px-4 pb-28 pt-4">
         <Routes>

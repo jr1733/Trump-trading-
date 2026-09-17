@@ -144,6 +144,45 @@ def test_quiet_hours_do_not_suppress_a_digest(db, user, prefs):
     assert digest_mod.send_digest(db, user)["created"] is True
 
 
+def test_the_quiet_hours_override_defaults_to_on(db, user, prefs):
+    assert prefs.digest_ignores_quiet_hours is True
+
+
+def test_quiet_hours_can_be_made_absolute(db, user, prefs):
+    """Opting out means quiet hours apply to the digest too."""
+    prefs.quiet_hours_start, prefs.quiet_hours_end = 0, 23
+    prefs.digest_ignores_quiet_hours = False
+    db.commit()
+
+    result = digest_mod.send_digest(db, user)
+    assert result["created"] is False
+    assert result["reason"] == "quiet hours"
+    assert db.execute(select(func.count(Notification.id))).scalar() == 0
+
+
+def test_opting_out_still_delivers_outside_quiet_hours(db, user, prefs):
+    prefs.quiet_hours_start, prefs.quiet_hours_end = 22, 23
+    prefs.digest_ignores_quiet_hours = False
+    db.commit()
+    # 12:00 UTC == 08:00 ET, well outside the quiet window.
+    moment = dt.datetime(2026, 7, 1, 12, 0, tzinfo=UTC)
+    assert digest_mod.send_digest(db, user, moment=moment)["created"] is True
+
+
+def test_the_rate_limit_never_applies_even_when_quiet_hours_do(db, user, prefs):
+    """The two overrides are independent: opting into quiet hours must not drag
+    the hourly cap back in, or a busy hour would silently eat the digest."""
+    prefs.digest_ignores_quiet_hours = False
+    prefs.max_per_hour = 1
+    db.commit()
+    notif.create_notification(
+        db, user_id=user.id, notification_type="new_event", title="t", body="b",
+        condition="c", window="w",
+    )
+    db.commit()
+    assert digest_mod.send_digest(db, user)["created"] is True
+
+
 def test_rate_limit_does_not_suppress_a_digest(db, user, prefs):
     prefs.max_per_hour = 1
     db.commit()

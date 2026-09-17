@@ -169,8 +169,13 @@ def send_digest(
         window=window,
         payload=digest,
         # A digest is scheduled, not interruptive: the user asked for it at this
-        # hour, so quiet hours and the hourly cap do not apply.
-        respect_quiet_hours=False,
+        # hour, so by default quiet hours do not apply. That default is now the
+        # user's to change -- if their quiet hours mean "nothing at all", the
+        # digest waits like everything else.
+        respect_quiet_hours=not prefs.digest_ignores_quiet_hours,
+        # The hourly cap is never applied: it exists to stop a burst of alerts,
+        # and one scheduled summary is not a burst. A digest silently eaten by a
+        # rate limit is the digest you most needed to see.
         respect_rate_limit=False,
     )
     db.commit()

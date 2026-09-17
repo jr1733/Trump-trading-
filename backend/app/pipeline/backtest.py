@@ -63,6 +63,9 @@ class BacktestParams:
     holding_days: int = 5
     sentiment_mode: str = "rule_based"  # rule_based | llm
     include_low_confidence: bool = False
+    #: Keep only observations whose holding windows do not overlap. Trades
+    #: sample size for independence -- see `drop_overlapping`.
+    non_overlapping_only: bool = False
     #: Fractions of the date range assigned to train / validation / test.
     splits: tuple[float, float, float] = (0.6, 0.2, 0.2)
 
@@ -76,6 +79,7 @@ class BacktestParams:
             "holding_days": self.holding_days,
             "sentiment_mode": self.sentiment_mode,
             "include_low_confidence": self.include_low_confidence,
+            "non_overlapping_only": self.non_overlapping_only,
             "splits": list(self.splits),
         }
 
@@ -173,6 +177,39 @@ def overlap_fraction(observations: list[Observation]) -> float:
         if current.reaction_day <= previous.exit_day
     )
     return overlapping / (len(ordered) - 1)
+
+
+def drop_overlapping(observations: list[Observation]) -> list[Observation]:
+    """Greedily keep a chronological set of non-overlapping holding windows.
+
+    Walk the observations in order of reaction day, keep the first, and skip any
+    whose window starts on or before the last kept window's exit. What survives
+    is a set that never counts the same stretch of calendar twice.
+
+    The comparison is **global, not per-ticker**, which is the strict reading and
+    the one that matches `overlap_fraction`: after this filter that function
+    returns 0.0 by construction. Two different tickers over the same week are
+    still mostly the same market move, so treating them as two independent draws
+    is the error this option exists to remove.
+
+    Ties are broken by |score|, so when several events land on the same day the
+    strongest signal is the one that survives rather than whichever the database
+    happened to return first. This is a *selection* rule applied after scoring,
+    not a peek at outcomes: it never looks at a return.
+
+    The cost is sample size, and it is usually severe -- a five-session holding
+    period over a busy month can collapse to four or five observations. That is
+    the honest number. The alternative is a larger N whose dispersion statistics
+    are quietly wrong.
+    """
+    if not observations:
+        return []
+    ordered = sorted(observations, key=lambda o: (o.reaction_day, -abs(o.score)))
+    kept: list[Observation] = [ordered[0]]
+    for candidate in ordered[1:]:
+        if candidate.reaction_day > kept[-1].exit_day:
+            kept.append(candidate)
+    return kept
 
 
 def summarise(observations: list[Observation], holding_days: int) -> dict:
@@ -325,6 +362,9 @@ class BacktestResult:
     by_split: dict = field(default_factory=dict)
     observations: list[Observation] = field(default_factory=list)
     skipped: list[dict] = field(default_factory=list)
+    #: Observations removed by `non_overlapping_only`, reported so the drop in N
+    #: is visible rather than looking like a thin sample.
+    dropped_overlapping: int = 0
     llm_contaminated: bool = False
     notes: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
@@ -337,6 +377,7 @@ class BacktestResult:
             "observations": [o.as_dict() for o in self.observations],
             "skipped_count": len(self.skipped),
             "skipped": self.skipped[:50],
+            "dropped_overlapping": self.dropped_overlapping,
             "llm_contaminated": self.llm_contaminated,
             "notes": self.notes,
             "warnings": self.warnings,
@@ -437,6 +478,11 @@ def run_backtest(
                 )
             )
 
+    if params.non_overlapping_only:
+        before = len(result.observations)
+        result.observations = drop_overlapping(result.observations)
+        result.dropped_overlapping = before - len(result.observations)
+
     result.overall = summarise(result.observations, params.holding_days)
     for name, start, end in boundaries:
         subset = [o for o in result.observations if o.split == name]
@@ -495,6 +541,17 @@ def _add_notes(result: BacktestResult, params: BacktestParams) -> None:
             "Sentiment came from the rule-based lexicon. No language model was "
             "involved, so there is no training-data contamination."
         )
+        # "No LLM" is not the same as "no hindsight", and conflating the two
+        # would be the exact over-claim this module exists to avoid.
+        result.notes.append(
+            "The lexicon is not hindsight-free, though. Its keywords and weights "
+            "were written in 2026 by someone who already knew which topics moved "
+            "markets over the period being scored, and were revised while looking "
+            "at this app's own output. That is a weaker and less specific leak "
+            "than a language model's, because a fixed word list cannot recall a "
+            "particular event -- but it is a leak. Rule-based is the cleaner of "
+            "the two modes, not a clean one."
+        )
 
     n = result.overall.get("n", 0)
     if n < settings.min_usable_sample:
@@ -507,13 +564,22 @@ def _add_notes(result: BacktestResult, params: BacktestParams) -> None:
             f"Sharpe is annualised, assumes a zero cash rate, and is withheld below "
             f"{MIN_SHARPE_SAMPLE} observations."
         )
-    overlap = result.overall.get("overlap_fraction") or 0.0
-    if overlap > 0.25:
-        result.warnings.append(
-            f"{overlap:.0%} of holding windows overlap the previous observation. "
-            "Overlapping windows are not independent, so the standard deviation, "
-            "Sharpe and drawdown are all flattered."
+    if params.non_overlapping_only:
+        result.notes.append(
+            f"Non-overlapping mode: {result.dropped_overlapping} observation(s) were "
+            "dropped because their holding window overlapped one already counted. "
+            "What remains never counts the same stretch of calendar twice, so the "
+            "dispersion statistics are honest -- at the cost of a much smaller N."
         )
+    else:
+        overlap = result.overall.get("overlap_fraction") or 0.0
+        if overlap > 0.25:
+            result.warnings.append(
+                f"{overlap:.0%} of holding windows overlap the previous observation. "
+                "Overlapping windows are not independent, so the standard deviation, "
+                "Sharpe and drawdown are all flattered. Re-run with "
+                "'non-overlapping windows only' to see the independent sample."
+            )
     unreliable = sum(1 for o in result.observations if o.sample_flag == "unreliable")
     if unreliable:
         result.notes.append(

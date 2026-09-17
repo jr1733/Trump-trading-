@@ -45,6 +45,13 @@ interface DataQualityBody {
     estimated_cost_usd: number;
     daily_call_budget: number;
   };
+  by_source_7d: Array<{
+    source: string;
+    events: number;
+    relevant: number;
+    model_calls: number;
+    estimated_cost_usd: number;
+  }>;
 }
 
 interface JobsBody {
@@ -150,6 +157,48 @@ export default function DataQuality() {
           time of the call; check your provider invoice for the real figure.
         </p>
       </Section>
+
+      {q.by_source_7d.length > 0 && (
+        <Section title="Volume and spend by source (7 days)">
+          <div className="card">
+            <div className="overflow-x-auto">
+              <table className="w-full text-xs">
+                <thead className="text-muted">
+                  <tr>
+                    <th className="py-1 pr-2 text-left font-medium">Source</th>
+                    <th className="py-1 pr-1 text-right font-medium">Events</th>
+                    <th className="py-1 pr-1 text-right font-medium">Kept</th>
+                    <th className="py-1 pr-1 text-right font-medium">Calls</th>
+                    <th className="py-1 text-right font-medium">Cost</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {q.by_source_7d.map((row) => (
+                    <tr key={row.source} className="border-t border-edge/60">
+                      <td className="py-1.5 pr-2">{row.source}</td>
+                      <td className="py-1.5 pr-1 text-right tabular-nums">{row.events}</td>
+                      <td className="py-1.5 pr-1 text-right tabular-nums text-muted">
+                        {row.relevant}
+                      </td>
+                      <td className="py-1.5 pr-1 text-right tabular-nums">{row.model_calls}</td>
+                      <td className="py-1.5 text-right tabular-nums">
+                        ${num(row.estimated_cost_usd, 4)}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <p className="mt-2 text-[11px] leading-relaxed text-muted">
+              <strong>Kept</strong> is how many passed the relevance gate. Congress is the
+              source to watch here: it moves hundreds of bills a week, so its adapter applies
+              a keyword filter <em>before</em> anything is stored. Many events and few calls
+              means that filter is doing its job; many calls means it is not, and the
+              threshold wants raising.
+            </p>
+          </div>
+        </Section>
+      )}
 
       {q.malformed_analyses.length > 0 && (
         <Section title="Malformed model output">

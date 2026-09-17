@@ -16,6 +16,7 @@ from app.pipeline.backtest import (
     MIN_SHARPE_SAMPLE,
     BacktestParams,
     assign_split,
+    drop_overlapping,
     max_drawdown,
     overlap_fraction,
     point_in_time_signal,
@@ -92,9 +93,10 @@ def test_split_assignment_follows_the_boundaries():
 
 # --- overlap --------------------------------------------------------------
 class FakeObservation:
-    def __init__(self, reaction_day: dt.date, exit_day: dt.date) -> None:
+    def __init__(self, reaction_day: dt.date, exit_day: dt.date, score: float = 0.5) -> None:
         self.reaction_day = reaction_day
         self.exit_day = exit_day
+        self.score = score
 
 
 def test_overlap_fraction_detects_overlapping_windows():
@@ -108,6 +110,57 @@ def test_overlap_fraction_detects_overlapping_windows():
 
 def test_overlap_fraction_of_a_single_observation_is_zero():
     assert overlap_fraction([FakeObservation(dt.date(2026, 1, 5), dt.date(2026, 1, 9))]) == 0.0
+
+
+# --- non-overlapping mode -------------------------------------------------
+def test_drop_overlapping_keeps_a_chronological_independent_set():
+    rows = [
+        FakeObservation(dt.date(2026, 1, 5), dt.date(2026, 1, 9)),
+        FakeObservation(dt.date(2026, 1, 7), dt.date(2026, 1, 13)),  # overlaps the first
+        FakeObservation(dt.date(2026, 1, 8), dt.date(2026, 1, 14)),  # also overlaps
+        FakeObservation(dt.date(2026, 2, 2), dt.date(2026, 2, 6)),   # clear
+    ]
+    kept = drop_overlapping(rows)
+    assert [o.reaction_day for o in kept] == [dt.date(2026, 1, 5), dt.date(2026, 2, 2)]
+
+
+def test_the_filtered_set_has_no_overlap_left():
+    """The invariant that makes the option worth having."""
+    rows = [
+        FakeObservation(dt.date(2026, 1, d), dt.date(2026, 1, d + 5)) for d in range(1, 25)
+    ]
+    assert overlap_fraction(rows) > 0.9
+    assert overlap_fraction(drop_overlapping(rows)) == 0.0
+
+
+def test_a_window_starting_on_the_exit_day_still_overlaps():
+    """Boundary: same-day exit and entry share that session's price."""
+    rows = [
+        FakeObservation(dt.date(2026, 1, 5), dt.date(2026, 1, 9)),
+        FakeObservation(dt.date(2026, 1, 9), dt.date(2026, 1, 15)),
+    ]
+    assert len(drop_overlapping(rows)) == 1
+
+
+def test_the_day_after_the_exit_day_does_not_overlap():
+    rows = [
+        FakeObservation(dt.date(2026, 1, 5), dt.date(2026, 1, 9)),
+        FakeObservation(dt.date(2026, 1, 10), dt.date(2026, 1, 16)),
+    ]
+    assert len(drop_overlapping(rows)) == 2
+
+
+def test_same_day_ties_keep_the_strongest_signal():
+    rows = [
+        FakeObservation(dt.date(2026, 1, 5), dt.date(2026, 1, 9), score=0.3),
+        FakeObservation(dt.date(2026, 1, 5), dt.date(2026, 1, 9), score=-0.8),
+    ]
+    kept = drop_overlapping(rows)
+    assert len(kept) == 1 and kept[0].score == -0.8
+
+
+def test_drop_overlapping_of_nothing_is_nothing():
+    assert drop_overlapping([]) == []
 
 
 # --- a controlled market -------------------------------------------------

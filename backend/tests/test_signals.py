@@ -134,9 +134,50 @@ def test_score_is_bounded():
 
 
 def test_weights_are_renormalised_when_components_drop_out():
-    result = signal(sentiment=0.5, stats=stats(2))
+    result = signal(sentiment=0.5, stats=stats(12))
     assert sum(result.weights.values()) == pytest.approx(1.0)
-    assert set(result.weights) == {"sentiment", "novelty"}
+    assert set(result.weights) == {"sentiment", "historical", "consistency", "novelty"}
+
+
+# --- text-only mode (N < 10) ----------------------------------------------
+def test_an_unreliable_sample_falls_back_to_sentiment_alone():
+    """Not just "historical gets zero weight" -- novelty goes too, because with
+    no history it would only amplify the text reading with itself."""
+    result = signal(sentiment=0.5, novelty_value=1.0, stats=stats(2))
+    assert set(result.weights) == {"sentiment"}
+    assert "novelty" not in result.components
+
+
+def test_text_only_scores_are_capped_below_a_strong_label():
+    result = signal(sentiment=1.0, model_confidence=1.0, stats=stats(0))
+    cap = settings.signal_text_only_cap
+    assert result.score == pytest.approx(cap)
+    assert abs(result.score) < abs(settings.signal_threshold_strong_bull)
+    assert result.label == "BULLISH", "capped, but still allowed to say which way"
+
+
+def test_the_text_only_cap_is_symmetric():
+    result = signal(sentiment=-1.0, stats=stats(0))
+    assert result.score == pytest.approx(-settings.signal_text_only_cap)
+
+
+def test_the_cap_does_not_inflate_a_weak_reading():
+    """The cap is a ceiling, never a floor."""
+    result = signal(sentiment=0.1, stats=stats(0))
+    assert result.score == pytest.approx(0.1)
+
+
+def test_a_usable_sample_is_not_capped():
+    result = signal(
+        sentiment=1.0, novelty_value=1.0, stats=stats(50, median_abnormal=1.0, pos=100.0)
+    )
+    assert result.score == pytest.approx(1.0)
+
+
+def test_the_panel_says_the_score_was_capped():
+    blob = " ".join(signal(sentiment=1.0, stats=stats(3)).notes).lower()
+    assert "capped" in blob
+    assert "novelty is also dropped" in blob
 
 
 # --- the mandatory "Why?" panel ------------------------------------------

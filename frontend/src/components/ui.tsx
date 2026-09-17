@@ -1,6 +1,55 @@
 import { ReactNode } from 'react';
 
 import { flagLabel } from '../lib/format';
+import { analysisIsMock, marketIsMock, useConfig } from '../lib/useConfig';
+
+/* Mock-data labelling.
+ *
+ * Out of the box every price is synthetic and every analysis is canned. Those
+ * numbers look exactly like real ones -- same decimals, same colours, same
+ * confident little percentages -- so the only thing stopping someone reading a
+ * demo as a finding is saying so, in front of the numbers, on every page.
+ */
+
+/** Page-level banner. Rendered once in the app shell, above the routed page. */
+export function MockDataBanner() {
+  const config = useConfig();
+  const market = marketIsMock(config);
+  const analysis = analysisIsMock(config);
+  if (!config || (!market && !analysis)) return null;
+
+  const what = market && analysis ? 'Prices and analyses are' : market ? 'Prices are' : 'Analyses are';
+  return (
+    <div className="mx-4 mt-3 rounded-lg border border-warn/60 bg-warn/10 px-3 py-2">
+      <p className="text-xs font-bold text-warn">⚠ DEMO DATA — not real market data</p>
+      <p className="mt-0.5 text-[11px] leading-relaxed text-gray-300">
+        {what} synthetic.{' '}
+        {market && 'Every price, return and statistic on every page is generated, not observed. '}
+        {analysis && 'Analyses come from the offline canned scorer, not a language model. '}
+        Nothing here describes anything that happened in a real market.
+      </p>
+    </div>
+  );
+}
+
+/** Inline badge for a specific number or panel. */
+export function MockBadge({ kind = 'market' }: { kind?: 'market' | 'analysis' }) {
+  const config = useConfig();
+  const isMock = kind === 'market' ? marketIsMock(config) : analysisIsMock(config);
+  if (!isMock) return null;
+  return (
+    <span
+      className="chip bg-warn/15 text-warn"
+      title={
+        kind === 'market'
+          ? 'Synthetic prices from the mock provider, not a real market feed.'
+          : 'Canned offline analysis, not a language model reading.'
+      }
+    >
+      {kind === 'market' ? 'MOCK PRICES' : 'MOCK ANALYSIS'}
+    </span>
+  );
+}
 
 export function Spinner({ label = 'Loading' }: { label?: string }) {
   return (

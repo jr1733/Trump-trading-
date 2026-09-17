@@ -16,6 +16,7 @@ from app.models import (
     Watchlist,
     WatchlistTicker,
 )
+from app.config import settings
 from app.pipeline import notifications as notif
 
 UTC = dt.timezone.utc
@@ -359,6 +360,43 @@ def test_min_sample_size_gate(db, user):
     event = make_event(db)
     signal = make_signal(db, event, score=0.8, sample_size=3, sample_flag="unreliable")
     assert notif.evaluate_threshold_crossing(db, user_id=user.id, rule=rule, signal=signal) is None
+
+
+def test_an_unreliable_sample_never_raises_an_alert(db, user):
+    """A hard floor: the rule asks for nothing, and it is still excluded. Below
+    min_usable_sample the score is text-only, which is not a thing to wake
+    someone up for."""
+    rule = rule_with_thresholds(db, user, min_sample_size=0)
+    event = make_event(db)
+    signal = make_signal(
+        db, event, score=0.9, confidence=1.0, sample_size=4, sample_flag="unreliable"
+    )
+    assert notif.evaluate_threshold_crossing(db, user_id=user.id, rule=rule, signal=signal) is None
+
+
+def test_the_sample_floor_is_a_floor_not_a_ceiling(db, user):
+    """The same rule and score fire once the sample is usable."""
+    rule = rule_with_thresholds(db, user, min_sample_size=0)
+    event = make_event(db)
+    signal = make_signal(
+        db,
+        event,
+        score=0.9,
+        confidence=1.0,
+        sample_size=settings.min_usable_sample,
+        sample_flag="limited",
+    )
+    assert notif.evaluate_threshold_crossing(db, user_id=user.id, rule=rule, signal=signal) is not None
+
+
+def test_the_sample_floor_can_be_switched_off(db, user, monkeypatch):
+    monkeypatch.setattr(settings, "alerts_require_usable_sample", False)
+    rule = rule_with_thresholds(db, user, min_sample_size=0)
+    event = make_event(db)
+    signal = make_signal(
+        db, event, score=0.9, confidence=1.0, sample_size=4, sample_flag="unreliable"
+    )
+    assert notif.evaluate_threshold_crossing(db, user_id=user.id, rule=rule, signal=signal) is not None
 
 
 def test_threshold_body_uses_neutral_wording(db, user):

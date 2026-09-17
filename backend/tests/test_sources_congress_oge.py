@@ -77,6 +77,56 @@ def test_a_bill_without_a_title_is_skipped():
     assert CongressAdapter(api_key="k")._to_item(bill(title=""), "hr") is None
 
 
+# --- the keyword gate, before any model call ------------------------------
+def test_an_irrelevant_bill_never_becomes_an_item():
+    """The whole point: a post-office naming must not reach the pipeline, where
+    failing the relevance gate would still cost a triage call."""
+    adapter = CongressAdapter(api_key="k")
+    row = bill(
+        title="To designate the facility of the United States Postal Service at "
+        "12 Main Street as the John Smith Post Office",
+        latestAction={"actionDate": "2026-03-04", "text": "Referred to committee"},
+    )
+    assert adapter._to_item(row, "hr") is None
+    assert adapter.filtered_out == 1
+
+
+def test_a_market_relevant_bill_passes_the_gate():
+    adapter = CongressAdapter(api_key="k")
+    item = adapter._to_item(bill(), "hr")  # tariffs on semiconductors
+    assert item is not None
+    assert adapter.filtered_out == 0
+    assert item.payload["relevance_score"] >= 0.5
+    assert "tariff" in item.payload["relevance_reason"]
+
+
+def test_the_congress_gate_is_stricter_than_the_pipeline_gate():
+    """A bill that would squeak past the pipeline's 0.3 is rejected at 0.5."""
+    from app.pipeline.relevance import score_relevance
+
+    row = bill(title="A bill concerning border facility investment")
+    text = f"{row['title']}. Latest action: {row['latestAction']['text']}"
+
+    assert score_relevance(text, threshold=0.3).relevant is True
+    assert CongressAdapter(api_key="k", relevance_threshold=0.5)._to_item(row, "hr") is None
+
+
+def test_the_threshold_is_configurable():
+    row = bill(title="A bill concerning border facility investment")
+    assert CongressAdapter(api_key="k", relevance_threshold=0.2)._to_item(row, "hr") is not None
+
+
+def test_the_filtered_counter_resets_between_fetches():
+    adapter = CongressAdapter(api_key="k")
+    adapter._to_item(bill(title="To name a post office"), "hr")
+    assert adapter.filtered_out == 1
+    try:
+        adapter.fetch()
+    except Exception:
+        pass  # no network here; we only care that the counter was reset
+    assert adapter.filtered_out == 0
+
+
 def test_a_bill_without_any_date_is_skipped():
     row = bill(latestAction={}, updateDate=None)
     assert CongressAdapter(api_key="k")._to_item(row, "hr") is None

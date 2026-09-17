@@ -355,6 +355,7 @@ def get_preferences(db: Session = Depends(get_db), user: User = Depends(current_
         "max_per_hour": prefs.max_per_hour,
         "digest_enabled": prefs.digest_enabled,
         "digest_hour_local": prefs.digest_hour_local,
+        "digest_ignores_quiet_hours": prefs.digest_ignores_quiet_hours,
         "in_quiet_hours_now": notif.in_quiet_hours(prefs),
     }
 

@@ -277,7 +277,10 @@ def process_raw_event(
     # Archive rows were curated by whoever imported them; they are the sample,
     # so they bypass the relevance gate rather than being silently dropped.
     event.relevant = event.relevant or verdict.relevant or event.is_historical
-    if not event.relevant:
+    if not event.relevant and verdict.score >= settings.triage_relevance_floor:
+        # Escalate only genuinely borderline items. Something that matched no
+        # market-relevant term at all is not ambiguous, and spending a model
+        # call to confirm that is exactly the leak the rule gate exists to plug.
         analysis_mod.triage_event(db, event, client)
     if not event.relevant:
         event.analysis_status = "SKIPPED"

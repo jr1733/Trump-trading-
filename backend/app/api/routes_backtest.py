@@ -39,6 +39,7 @@ def create_backtest(
         holding_days=body.holding_days,
         sentiment_mode=body.sentiment_mode,
         include_low_confidence=body.include_low_confidence,
+        non_overlapping_only=body.non_overlapping_only,
         splits=(body.train_fraction, body.validation_fraction, test_fraction),
     )
 
