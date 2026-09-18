@@ -10,6 +10,7 @@
     python manage.py embed             # (re)build embeddings for similarity search
     python manage.py status            # counts, source health, LLM spend
     python manage.py purge-mock        # delete synthetic events, signals, prices
+    python manage.py verify-sources    # probe live feeds + market data
 
 `seed` loads REFERENCE DATA ONLY -- tickers, aliases, entities, the user,
 watchlist, alert rules, preferences and source rows. It loads no events and no
@@ -150,6 +151,19 @@ def cmd_purge_mock(args: argparse.Namespace) -> None:
         print("alert rules, preferences, sources) was NOT touched.")
 
 
+def cmd_verify_sources(args: argparse.Namespace) -> int:
+    """Probe live feeds and market data. Touches no database."""
+    from app.ops import verify
+
+    return verify.run(
+        sources=args.sources,
+        all_sources=args.all_sources,
+        market_only=args.market_only,
+        sources_only=args.sources_only,
+        verbose=args.verbose,
+    )
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = parser.add_subparsers(dest="command", required=True)
@@ -192,8 +206,21 @@ def main() -> None:
     )
     purge_cmd.set_defaults(func=cmd_purge_mock)
 
+    verify_cmd = sub.add_parser(
+        "verify-sources", help="probe live feeds and market data (no database writes)"
+    )
+    verify_cmd.add_argument("--sources", help="comma-separated keys (default: ENABLED_SOURCES)")
+    verify_cmd.add_argument("--all-sources", action="store_true")
+    verify_cmd.add_argument("--market-only", action="store_true")
+    verify_cmd.add_argument("--sources-only", action="store_true")
+    verify_cmd.add_argument("-v", "--verbose", action="store_true")
+    verify_cmd.set_defaults(func=cmd_verify_sources)
+
     args = parser.parse_args()
-    args.func(args)
+    # Subcommands that report a pass/fail verdict return an exit status; the
+    # rest return None. verify-sources is used as a post-deploy smoke test, so
+    # its status has to reach the shell.
+    raise SystemExit(args.func(args) or 0)
 
 
 if __name__ == "__main__":

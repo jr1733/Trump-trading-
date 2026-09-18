@@ -4,7 +4,7 @@ VENV ?= .venv
 PY   := $(VENV)/bin/python
 PIP  := $(VENV)/bin/pip
 
-.PHONY: help venv install migrate seed demo api worker test frontend build up down logs status verify-sources compose-check purge-mock backup-now restore
+.PHONY: help venv install migrate seed demo api worker test frontend build up down logs status verify-sources compose-check purge-mock backup-now restore deploy
 
 help:  ## Show this help
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}{printf "  %-12s %s\n", $$1, $$2}'
@@ -26,6 +26,11 @@ demo:  ## Seed + load the sample archive + poll + run the pipeline + embed
 
 embed:  ## Embed events that have no vector (or whose vector is stale)
 	cd backend && ../$(PY) manage.py embed
+
+deploy:  ## Print the production deploy command (runs on the VPS, as root)
+	@echo 'Run this ON THE SERVER, as root:'
+	@echo '  DOMAIN=your.domain LETSENCRYPT_EMAIL=you@example.com sudo -E ./deploy/deploy.sh'
+	@echo 'It is idempotent and stops to ask before anything rate-limited or destructive.'
 
 compose-check:  ## Fail if anything but nginx publishes a port
 	python3 scripts/check_compose_exposure.py

@@ -56,7 +56,20 @@ there is no flag to remember to unset.
 
 ## Deploy to the VPS, in order
 
-Each step assumes the previous one passed. Do not skip step 3.
+**There is a script that does all of this: `deploy/deploy.sh`.** Run it on the server as root,
+with `DOMAIN` and `LETSENCRYPT_EMAIL` set. It is idempotent, prints PASS/FAIL per step, exits
+non-zero on the first failure, and stops to ask you at four points: for the two API keys (read
+hidden, never echoed), after `verify-sources` (only you can judge whether a moved feed is
+acceptable), before the rate-limited certificate request, and before rebooting. It will not set
+`LLM_FAKE_MODE=false`, will not change `DEPLOYED_AT` once written, will not enable the shadow
+model, and opens no port but 22/80/443.
+
+```bash
+DOMAIN=market.example.com LETSENCRYPT_EMAIL=you@example.com sudo -E ./deploy/deploy.sh
+```
+
+The steps below are what it does, in case you would rather drive it by hand or need to debug a
+step it stopped on. Each assumes the previous one passed. Do not skip step 3.
 
 ### 1. Server
 
@@ -83,9 +96,8 @@ cp .env.example .env
 
 python3 -c "import secrets; print(secrets.token_urlsafe(32))"   # APP_AUTH_TOKEN
 python3 -c "import secrets; print(secrets.token_urlsafe(24))"   # POSTGRES_PASSWORD
-docker compose run --rm api python /app/../scripts/generate_vapid_keys.py 2>/dev/null \
-  || docker run --rm -v "$PWD:/w" -w /w python:3.11-slim sh -c \
-     "pip install -q py-vapid && python scripts/generate_vapid_keys.py"
+docker run --rm -v "$PWD/scripts:/s:ro" python:3.11-slim sh -c \
+  "pip install -q cryptography && python /s/generate_vapid_keys.py"
 ```
 
 Edit `.env`:
@@ -121,8 +133,8 @@ ever produce.
 
 ```bash
 docker compose build
-docker compose run --rm api sh -c 'cd /app && python ../scripts/verify_sources.py --all-sources -v'
-docker compose run --rm api sh -c 'cd /app && python ../scripts/verify_sources.py --market-only'
+docker compose run --rm --no-deps api python manage.py verify-sources --all-sources -v
+docker compose run --rm --no-deps api python manage.py verify-sources --market-only
 ```
 
 **Expect failures.** That is what the script is for; it is not a sign the deploy is broken.
